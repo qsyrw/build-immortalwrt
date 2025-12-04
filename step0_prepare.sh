@@ -22,3 +22,5 @@ else
         git pull --rebase || git pull || true
     fi
 fi
+
+log "Step0: 完成"
