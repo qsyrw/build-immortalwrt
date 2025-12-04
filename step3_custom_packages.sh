@@ -22,3 +22,5 @@ git_clone_or_pull https://github.com/zzzz0317/xgp-v3-screen.git package/zz/xgp-v
 git_clone_or_pull https://github.com/asvow/luci-app-tailscale package/luci-app-tailscale
 git_clone_or_pull https://github.com/EasyTier/luci-app-easytier.git package/luci-app-easytier
 git_clone_or_pull https://github.com/sirpdboy/luci-app-lucky.git package/lucky
+
+log "Step3: 完成"
