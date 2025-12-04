@@ -39,3 +39,5 @@ EOF
 chmod +x ~/build-immortalwrt/immortalwrt_build_steps/step2_fix_odhcp.sh
 
 echo "step2_fix_odhcp.sh 已替换并赋权完成"
+
+log "Step2: 完成"
