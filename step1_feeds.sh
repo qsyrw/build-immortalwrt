@@ -14,3 +14,5 @@ grep -q '^src-git qmodem ' feeds.conf.default 2>/dev/null || \
 ./scripts/feeds update qmodem || true
 ./scripts/feeds install -a -p qmodem || true
 ./scripts/feeds install -a -f -p qmodem || true
+
+log "Step1: 完成"
