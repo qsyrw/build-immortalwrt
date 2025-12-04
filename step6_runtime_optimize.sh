@@ -1,15 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-FILES="$HOME/immortalwrt/files"
-log(){ echo "$(date '+%F %T') $*"; }
+ROOT="$HOME"
+IW_DIR="$ROOT/immortalwrt"
+FILES="$IW_DIR/files"
 
-###########################
+log(){ printf "%s %s\n" "$(date '+%F %T')" "$*"; }
+
+log "Step6: FIRSTBOOT + 运行期优化 + LuCI动态界面"
+
+# 先确保多级目录存在并可写
+mkdir -p "$FILES"/{usr/lib/lua/luci,usr/bin,etc/uci-defaults,etc/init.d,etc/hotplug.d/usb,etc/hotplug.d/pci,lib/upgrade/keep.d}
+chmod -R u+rwX "$FILES/usr/lib/lua/luci" "$FILES/usr/bin"
+
+################################
 # 6.x.1 FIRSTBOOT 保底配置 + 刷机判定
-###########################
+################################
 cat > "$FILES/etc/uci-defaults/99-firstboot-safe" <<'EOF'
 #!/bin/sh
 # v1.3.0
+# FIRSTBOOT 保底 + 运行期优化 + 刷机类型判定
 if [ ! -f /etc/config/.firstboot_marker ]; then
   NEW_FLASH=1
   touch /etc/config/.firstboot_marker
@@ -34,6 +44,7 @@ EOC
     uci set wireless.$R.country='US'
     [ -z "$FIRST_RADIO" ] && FIRST_RADIO="$R"
   done
+
   if [ -n "$FIRST_RADIO" ]; then
     uci set wireless.$FIRST_RADIO.band='2g'
     uci set wireless.$FIRST_RADIO.channel='auto'
@@ -64,6 +75,7 @@ EOC
       uci set wireless.$IF.key='88888888'
     done
   fi
+
   uci commit wireless || true
   [ -f /etc/init.d/zz-runtime-optimize ] && /etc/init.d/zz-runtime-optimize enable 2>/dev/null || true
 else
@@ -71,91 +83,65 @@ else
   uci set luci.main.mediaurlbase='/luci-static/argon' 2>/dev/null || true
   uci commit luci 2>/dev/null || true
 fi
+
 exit 0
 EOF
 chmod +x "$FILES/etc/uci-defaults/99-firstboot-safe"
 
-###########################
+################################
 # 6.x.2 运行期优化服务
-###########################
+################################
 cat > "$FILES/etc/init.d/zz-runtime-optimize" <<'EOF'
 #!/bin/sh /etc/rc.common
+# Provides: zz-runtime-optimize
+# Description: Runtime optimization for WiFi, QModem, and mwan3
 START=50
+
 USE_PROCD=1
-start(){
+
+start() {
   logger -t zz-runtime "start"
   procd_open_instance
   procd_set_param command /usr/bin/zz-runtime-optimize.sh
   procd_set_param respawn
   procd_close_instance
 }
-stop(){
+
+stop() {
   logger -t zz-runtime "stop"
   return 0
 }
 EOF
 chmod +x "$FILES/etc/init.d/zz-runtime-optimize"
 
-###########################
-# 6.x.3 运行期优化脚本
-###########################
+################################
+# 6.x.3 运行期优化实际逻辑
+################################
 cat > "$FILES/usr/bin/zz-runtime-optimize.sh" <<'EOF'
 #!/bin/sh
 log(){ logger -t zz-runtime "$*"; }
-wait_for_network(){ timeout=${1:-30}; while [ $timeout -gt 0 ]; do ubus call network.interface dump >/dev/null 2>&1 && return 0 || true; timeout=$((timeout-1)); sleep 1; done; return 1; }
+wait_for_network() { timeout=${1:-30}; while [ $timeout -gt 0 ]; do if ubus call network.interface dump >/dev/null 2>&1; then return 0; fi; timeout=$((timeout-1)); sleep 1; done; return 1; }
+choose_best_channel(){ radio="$1"; band="$(uci -q get wireless.$radio.band || echo '')"; candidates=""; case "$band" in *2g*|*2.4*) candidates="1 6 11" ;; *5g*) candidates="36 40 44 48 149 153 157 161" ;; *6g*) candidates="37 1" ;; *) candidates="auto" ;; esac; if [ "$candidates" = "auto" ]; then echo "auto"; return 0; fi; if ! command -v iwinfo >/dev/null 2>&1; then echo "$(echo $candidates | awk '{print $1}')"; return 0; fi; scan_output="$(iwinfo "$radio" scan 2>/dev/null || true)"; if [ -z "$scan_output" ]; then echo "$(echo $candidates | awk '{print $1}')"; return 0; fi; best="" ; bestn=999999; for ch in $candidates; do n=$(echo "$scan_output" | grep -i "Channel: $ch" | wc -l); if [ "$n" -lt "$bestn" ]; then bestn="$n"; best="$ch"; fi; done; if [ -z "$best" ]; then echo "$(echo $candidates | awk '{print $1}')"; else echo "$best"; fi; }
+detect_qmodem_slots(){ for d in /sys/bus/usb/devices/*; do [ -d "$d" ] || continue; if ls "$d"/driver 2>/dev/null | grep -q . 2>/dev/null || ls "$d"/*/* 2>/dev/null | grep -q "tty" 2>/dev/null; then port="$(basename "$d")"; if ! uci show qmodem 2>/dev/null | grep -q "slot='$port'"; then uci add qmodem modem-slot; idx=$(uci show qmodem | tail -n1 | cut -d. -f2); uci set qmodem.$idx.type='usb'; uci set qmodem.$idx.slot="$port"; uci set qmodem.$idx.alias="wwan_$port"; uci commit qmodem; log "added qmodem usb slot $port"; fi; fi; done; for p in /sys/bus/pci/devices/*; do [ -d "$p" ] || continue; addr="$(basename "$p")"; vend="$(cat "$p/vendor" 2>/dev/null || true)"; if [ -n "$vend" ]; then if ! uci show qmodem 2>/dev/null | grep -q "slot='$addr'"; then uci add qmodem modem-slot; idx=$(uci show qmodem | tail -n1 | cut -d. -f2); uci set qmodem.$idx.type='pcie'; uci set qmodem.$idx.slot="$addr"; uci set qmodem.$idx.alias="mpcie_$addr"; uci commit qmodem; log "added qmodem pcie slot $addr"; fi; fi; done; }
+apply_wifi_tuning(){ if ! command -v iwinfo >/dev/null 2>&1; then log "iwinfo not present; skipping wifi tuning"; return 0; fi; for radio in $(uci show wireless 2>/dev/null | grep "=wifi-device" | cut -d. -f2); do uci set wireless.$radio.disabled='0' || true; best=$(choose_best_channel "$radio"); [ -n "$best" ] && uci set wireless.$radio.channel="$best"; log "radio $radio best channel: $best"; done; uci commit wireless || true; command -v wifi >/dev/null 2>&1 && (wifi reload || wifi up || true); }
+ensure_mwan3_policy(){ if ! uci show mwan3 >/dev/null 2>&1; then log "mwan3 not present; skipping policy mapping"; return 0; fi; for sec in $(uci show qmodem 2>/dev/null | cut -d. -f2 | sort -u); do if [ "$(uci -q get qmodem.$sec.type)" = "usb" ] || [ "$(uci -q get qmodem.$sec.type)" = "pcie" ]; then iface_name="if_$sec"; if ! uci -q get mwan3.$iface_name >/dev/null 2>&1; then uci set mwan3.$iface_name='interface'; uci set mwan3.$iface_name.enabled='1'; uci set mwan3.$iface_name.proto='dhcp'; uci commit mwan3; log "mwan3 interface $iface_name created for qmodem.$sec"; fi; fi; done; if ! uci -q get mwan3.policy_balanced >/dev/null 2>&1; then uci add mwan3 policy; uci set mwan3.@policy[-1].name='balanced'; idx=0; for member in $(uci show mwan3 2>/dev/null | grep ".interface=" | cut -d. -f2); do [ $idx -ge 8 ] && break; uci add mwan3 member; uci set mwan3.@member[-1].interface=$member; uci set mwan3.@member[-1].metric='1'; uci set mwan3.@member[-1].weight='1'; idx=$((idx+1)); done; uci commit mwan3; log "mwan3 policy_balanced created"; fi; }
 
-choose_best_channel(){
-  radio="$1"; band="$(uci -q get wireless.$radio.band || echo '')"; candidates=""
-  case "$band" in
-    *2g*|*2.4*) candidates="1 6 11";;
-    *5g*) candidates="36 40 44 48 149 153 157 161";;
-    *6g*) candidates="37 1";;
-    *) candidates="auto";;
-  esac
-  [ "$candidates" = "auto" ] && { echo "auto"; return 0; }
-  [ ! -x "$(command -v iwinfo)" ] && { echo "$(echo $candidates | awk '{print $1}')"; return 0; }
-  scan_output="$(iwinfo "$radio" scan 2>/dev/null || true)"; best=""; bestn=999999
-  for ch in $candidates; do n=$(echo "$scan_output" | grep -i "Channel: $ch" | wc -l); [ "$n" -lt "$bestn" ] && bestn="$n" && best="$ch"; done
-  echo "${best:-$(echo $candidates | awk '{print $1}')}"
-}
-
-detect_qmodem_slots(){
-  for d in /sys/bus/usb/devices/*; do [ -d "$d" ] || continue; port="$(basename "$d")"; [ ! -z "$(ls "$d"/* 2>/dev/null)" ] && ! uci show qmodem 2>/dev/null | grep -q "slot='$port'" && { uci add qmodem modem-slot; idx=$(uci show qmodem | tail -n1 | cut -d. -f2); uci set qmodem.$idx.type='usb'; uci set qmodem.$idx.slot="$port"; uci set qmodem.$idx.alias="wwan_$port"; uci commit qmodem; log "added qmodem usb slot $port"; }; done
-  for p in /sys/bus/pci/devices/*; do [ -d "$p" ] || continue; addr="$(basename "$p")"; vend="$(cat "$p/vendor" 2>/dev/null || true)"; [ -n "$vend" ] && ! uci show qmodem 2>/dev/null | grep -q "slot='$addr'" && { uci add qmodem modem-slot; idx=$(uci show qmodem | tail -n1 | cut -d. -f2); uci set qmodem.$idx.type='pcie'; uci set qmodem.$idx.slot="$addr"; uci set qmodem.$idx.alias="mpcie_$addr"; uci commit qmodem; log "added qmodem pcie slot $addr"; }; done
-}
-
-apply_wifi_tuning(){
-  [ ! -x "$(command -v iwinfo)" ] && { log "iwinfo not found, skip"; return 0; }
-  for radio in $(uci show wireless 2>/dev/null | grep "=wifi-device" | cut -d. -f2); do
-    uci set wireless.$radio.disabled='0' || true
-    best=$(choose_best_channel "$radio")
-    [ -n "$best" ] && uci set wireless.$radio.channel="$best"
-    log "radio $radio best channel: $best"
-  done
-  uci commit wireless || true
-  command -v wifi >/dev/null 2>&1 && (wifi reload || wifi up || true)
-}
-
-ensure_mwan3_policy(){
-  [ ! -d "/etc/config/mwan3" ] && { log "mwan3 not present, skip"; return 0; }
-  for sec in $(uci show qmodem 2>/dev/null | cut -d. -f2 | sort -u); do
-    [ "$(uci -q get qmodem.$sec.type)" = "usb" ] || [ "$(uci -q get qmodem.$sec.type)" = "pcie" ] || continue
-    iface_name="if_$sec"
-    [ -z "$(uci -q get mwan3.$iface_name || true)" ] && { uci set mwan3.$iface_name='interface'; uci set mwan3.$iface_name.enabled='1'; uci set mwan3.$iface_name.proto='dhcp'; uci commit mwan3; log "mwan3 interface $iface_name created"; }
-  done
-}
-
-log "zz-runtime: waiting network"; wait_for_network 30 || log "network not detected"; sleep 3
-log "zz-runtime: detecting qmodem"; detect_qmodem_slots
-log "zz-runtime: wifi tuning"; apply_wifi_tuning
-log "zz-runtime: mwan3 policy"; ensure_mwan3_policy
+log "zz-runtime: waiting for network"
+wait_for_network 30 || log "network daemon not detected early; continuing"
+sleep 3
+log "zz-runtime: detecting qmodem slots"
+detect_qmodem_slots
+log "zz-runtime: applying wifi tuning"
+apply_wifi_tuning
+log "zz-runtime: ensuring mwan3 policy mapping"
+ensure_mwan3_policy
 log "zz-runtime: done"
 EOF
 chmod +x "$FILES/usr/bin/zz-runtime-optimize.sh"
 
-###########################
-# Step6.4: 自动启用 init.d
-###########################
+################################
+# 6.x.4 自动启用 init.d
+################################
 cat > "$FILES/etc/uci-defaults/97-enable-runtime" <<'EOF'
 #!/bin/sh
 [ -f /etc/init.d/zz-runtime-optimize ] && /etc/init.d/zz-runtime-optimize enable 2>/dev/null || true
@@ -163,11 +149,12 @@ exit 0
 EOF
 chmod +x "$FILES/etc/uci-defaults/97-enable-runtime"
 
-###########################
-# Step6.5: LuCI 动态状态界面
-###########################
+################################
+# 6.x.5 LuCI骨架动态状态界面
+################################
 LUCI_DIR="$FILES/usr/lib/lua/luci"
-mkdir -p "$LUCI_DIR/controller" "$LUCI_DIR/model/cbi/zz_runtime_optimize" "$LUCI_DIR/view/zz_runtime_optimize"
+mkdir -p "$LUCI_DIR"/{controller,model/cbi/zz_runtime_optimize,view/zz_runtime_optimize}
+chmod -R u+rwX "$LUCI_DIR"
 
 # 控制器
 cat > "$LUCI_DIR/controller/zz_runtime_optimize.lua" <<'EOF'
@@ -176,70 +163,78 @@ function index()
   entry({"admin","system","runtime_optimize"}, cbi("zz_runtime_optimize/main"), _("运行时优化"), 50).dependent = true
 end
 EOF
+chmod 644 "$LUCI_DIR/controller/zz_runtime_optimize.lua"
 
-# CBI 模型
+# CBI模型
 cat > "$LUCI_DIR/model/cbi/zz_runtime_optimize/main.lua" <<'EOF'
-local uci=require"luci.model.uci".cursor()
-local m=Map("zz_runtime_optimize","运行时优化状态")
-local s=m:section(SimpleSection,"概览")
-s.description="此页面为运行时优化骨架页，当前展示安全占位信息。"
-local t=m:section(SimpleSection,"WiFi 状态")
-t.template="zz_runtime_optimize/wifi_status"
-local q=m:section(SimpleSection,"QModem 状态")
-q.template="zz_runtime_optimize/qmodem_status"
+local uci = require "luci.model.uci".cursor()
+local m = Map("zz_runtime_optimize", "运行时优化状态")
+local s = m:section(SimpleSection, "概览")
+s.description = "此页面为运行时优化骨架页，当前展示的是安全占位信息。"
+local t = m:section(SimpleSection, "WiFi 状态")
+t.template = "zz_runtime_optimize/wifi_status"
+local q = m:section(SimpleSection, "QModem 状态")
+q.template = "zz_runtime_optimize/qmodem_status"
 return m
 EOF
+chmod 644 "$LUCI_DIR/model/cbi/zz_runtime_optimize/main.lua"
 
-# WiFi 模板
+# WiFi模板
 cat > "$LUCI_DIR/view/zz_runtime_optimize/wifi_status.htm" <<'EOF'
 <h3>WiFi 运行状态（占位）</h3>
 <ul>
 <%
-  local uci=require"luci.model.uci".cursor()
-  local radios={}
-  pcall(function() uci:foreach("wireless","wifi-device",function(s) radios[#radios+1]=s end) end)
+  local uci = require "luci.model.uci".cursor()
+  local radios = {}
+  pcall(function()
+    uci:foreach("wireless","wifi-device",function(s) radios[#radios+1]=s end)
+  end)
   if #radios==0 then
 %>
-<li>未检测到 wireless 配置</li>
+<li>未检测到 wireless 配置（或固件未安装相关包）。</li>
 <%
   else
-    for _,r in ipairs(radios) do
-      local name=r[".name"] or "(unknown)"
-      local band=uci:get("wireless",name,"band") or "未知"
-      local channel=uci:get("wireless",name,"channel") or "未知"
+    for _, r in ipairs(radios) do
+      local name = r[".name"] or "(unknown)"
+      local band = uci:get("wireless", name, "band") or "未知"
+      local channel = uci:get("wireless", name, "channel") or "未知"
 %>
-<li><strong><%=name%></strong> — 频段: <%=band%>; 信道: <%=channel%></li>
+<li><strong><%= name %></strong> — 频段: <%= band %>; 信道: <%= channel %></li>
 <%
     end
   end
 %>
 </ul>
 EOF
+chmod 644 "$LUCI_DIR/view/zz_runtime_optimize/wifi_status.htm"
 
-# QModem 模板
+# QModem模板
 cat > "$LUCI_DIR/view/zz_runtime_optimize/qmodem_status.htm" <<'EOF'
 <h3>QModem 插槽状态（占位）</h3>
 <ul>
 <%
-  local uci=require"luci.model.uci".cursor()
-  local slots={}
-  pcall(function() uci:foreach("qmodem","modem-slot",function(s) slots[#slots+1]=s end) end)
+  local uci = require "luci.model.uci".cursor()
+  local slots = {}
+  pcall(function()
+    uci:foreach("qmodem","modem-slot",function(s) slots[#slots+1]=s end)
+  end)
   if #slots==0 then
 %>
-<li>未检测到 qmodem 配置</li>
+<li>未检测到 qmodem 配置（可能未安装 qmodem 包或尚未识别任何设备）。</li>
 <%
   else
-    for _,s in ipairs(slots) do
-      local id=s[".name"] or "(unknown)"
-      local typ=uci:get("qmodem",id,"type") or "未知"
-      local alias=uci:get("qmodem",id,"alias") or "未命名"
+    for _, s in ipairs(slots) do
+      local id = s[".name"] or "(unknown)"
+      local typ = uci:get("qmodem", id, "type") or "未知"
+      local alias = uci:get("qmodem", id, "alias") or "未命名"
 %>
-<li><strong><%=id%></strong> — 类型: <%=typ%>; 别名: <%=alias%></li>
+<li><strong><%= id %></strong> — 类型: <%= typ %>; 别名: <%= alias %></li>
 <%
     end
   end
 %>
 </ul>
 EOF
-chmod -R 644 "$LUCI_DIR"
-log "Step6 完成"
+chmod 644 "$LUCI_DIR/view/zz_runtime_optimize/qmodem_status.htm"
+
+log "Step6: 完成"
