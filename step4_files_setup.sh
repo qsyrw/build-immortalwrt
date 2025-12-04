@@ -11,3 +11,5 @@ mkdir -p "$FILES/etc" "$FILES/etc/config" "$FILES/etc/uci-defaults" "$FILES/etc/
 if [ -f feeds/qmodem/application/qmodem/files/etc/config/qmodem ]; then
     cp -f feeds/qmodem/application/qmodem/files/etc/config/qmodem "$FILES/etc/config/qmodem"
 fi
+
+log "Step4: 完成"
