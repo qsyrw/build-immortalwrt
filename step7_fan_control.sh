@@ -65,3 +65,5 @@ EOF
 chmod 644 "$LUCI_DIR/controller/zz_fan_control.lua" \
           "$LUCI_DIR/model/cbi/zz_fan_control/main.lua" \
           "$LUCI_DIR/view/zz_fan_control/status.htm"
+
+log "Step7: 完成"
