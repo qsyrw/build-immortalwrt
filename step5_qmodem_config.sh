@@ -8,3 +8,5 @@ cat > "$FILES/lib/upgrade/keep.d/zz-qmodem" <<'EOF'
 etc/config/qmodem
 etc/zz_build_id
 EOF
+
+log "Step5: 完成"
