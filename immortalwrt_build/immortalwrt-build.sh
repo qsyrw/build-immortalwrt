@@ -1,10 +1,9 @@
 #!/bin/bash
 
 # ==========================================================
-# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.11 (最终整合版)
-# - V4.9.9: 实现按固件类型/分支隔离源码目录，避免环境冲突。
-# - V4.9.10: 修正 run_menuconfig_and_save 中加入 make oldconfig 修复配置依赖。
-# - V4.9.11: 修正 run_menuconfig_and_save 中 make savedefconfig 返回错误但文件已生成的问题。
+# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.12 (最终修正版)
+# - V4.9.11: 修正 run_menuconfig_and_save 中 make savedefconfig 返回错误但文件已生成的问题 (已废弃此修正)。
+# - V4.9.12: 核心修正：因 make savedefconfig 在特定分支上存在系统缺陷，改为使用 scripts/diffconfig.sh 脚本手动生成差异配置。
 # ==========================================================
 
 # --- 变量定义 ---
@@ -71,8 +70,8 @@ main_menu() {
     while true; do
         clear
         echo "====================================================="
-        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.11 🔥"
-        echo "      (源码隔离 | 性能自适应 | 稀疏检出)"
+        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.12 🔥"
+        echo "      (源码隔离 | 性能自适应 | 差异配置修复)"
         echo "====================================================="
         echo "1) 🌟 新建机型配置 (Create New Configuration)"
         echo "2) ⚙️ 选择/编辑/删除机型配置 (Select/Edit/Delete Configuration)"
@@ -290,7 +289,7 @@ config_interaction() {
                 while IFS= read -r line; do
                     if [[ "$line" == "END" ]]; then
                         break
-                    fi
+                    }
                     if [[ -n "$line" ]]; then
                         new_injections+="$line"$'\n'
                     fi
@@ -339,7 +338,7 @@ config_interaction() {
     done
 }
 
-# 3.4 运行 menuconfig 并保存文件 (V4.9.11 修正)
+# 3.4 运行 menuconfig 并保存文件 (V4.9.12 修正：使用 diffconfig.sh)
 run_menuconfig_and_save() {
     local CONFIG_NAME="$1"
     local FW_BRANCH="$2"
@@ -437,18 +436,50 @@ run_menuconfig_and_save() {
 
                 # 【V4.9.10 修正】运行 make oldconfig 来修复配置依赖
                 echo "正在运行 make oldconfig 修复依赖关系..."
+                # 忽略 make oldconfig 的错误，因为即使失败也可能已部分修复
                 make oldconfig || (echo "警告: make oldconfig 失败，但继续。" >> "$BUILD_LOG_PATH")
                 
-                # 【V4.9.11 修正】运行 make savedefconfig 生成差异文件，并忽略其非致命错误
-                echo "正在生成差异配置 (.diffconfig)..."
-                make savedefconfig 
-                local savedefconfig_status=$?
+                # --- V4.9.12 核心修正：使用 diffconfig.sh 脚本绕过 make savedefconfig 的缺陷 ---
+                echo "正在使用 scripts/diffconfig.sh 绕过 'make savedefconfig' 目标缺陷..."
+                
+                # 1. 查找当前配置对应的基准 defconfig
+                local TARGET_DEFCONFIG=""
+                # 尝试从 .config 中提取目标平台名称，例如 x86
+                local TARGET_NAME=$(grep '^CONFIG_TARGET_' .config | grep '=y' | head -n 1 | cut -d'_' -f3)
 
-                # 如果返回非零错误，但文件已生成，则忽略错误继续
-                if [ "$savedefconfig_status" -ne 0 ] && [ -f "$CURRENT_SOURCE_DIR/defconfig" ]; then
-                    echo "警告: make savedefconfig 流程返回错误 ($savedefconfig_status)，但差异配置文件已生成，继续操作。"
-                elif [ "$savedefconfig_status" -ne 0 ]; then
-                    echo "错误: make savedefconfig 失败，且未生成 defconfig 文件。"
+                if [ -n "$TARGET_NAME" ]; then
+                    # 尝试查找 target/linux/<target_name> 下的 defconfig/config.seed
+                    TARGET_DEFCONFIG=$(find target/linux/ -maxdepth 3 -type f -name "*config.seed" -o -name "defconfig" | grep "/$TARGET_NAME/")
+                    
+                    # 优先使用 defconfig，因为它通常是 OpenWrt 官方使用的基准
+                    TARGET_DEFCONFIG=$(echo "$TARGET_DEFCONFIG" | grep "defconfig" | head -n 1)
+                    if [ -z "$TARGET_DEFCONFIG" ]; then
+                         # 如果没有 defconfig，就使用 config.seed
+                         TARGET_DEFCONFIG=$(echo "$TARGET_DEFCONFIG" | head -n 1)
+                    fi
+                fi
+                
+                # 2. 如果找到基准 defconfig，使用它进行差异对比
+                if [ -f "$TARGET_DEFCONFIG" ]; then
+                    echo "找到基准配置: $TARGET_DEFCONFIG"
+                    # 使用 diffconfig.sh 对比 .config 和基准配置，并将结果输出到 defconfig
+                    ./scripts/diffconfig.sh -m "$TARGET_DEFCONFIG" .config > defconfig
+                    local diffconfig_status=$?
+
+                    if [ "$diffconfig_status" -ne 0 ]; then
+                        echo "致命错误: scripts/diffconfig.sh 运行失败。"
+                        exit 1
+                    fi
+                else
+                    echo "警告: 未能自动找到基准配置。将使用 .config 的内容作为差异文件 (不推荐)。"
+                    cp .config defconfig # 作为回退方案
+                fi
+                
+                # --- 绕过 make savedefconfig 的部分结束 ---
+                
+                # 检查 defconfig 是否存在
+                if [ ! -f "$CURRENT_SOURCE_DIR/defconfig" ]; then
+                    echo "致命错误: 无法生成 defconfig 文件，流程中止。"
                     exit 1
                 fi
                 
@@ -969,7 +1000,7 @@ execute_build() {
         IFS=$'\n' read -rd '' -a plugins <<< "$plugins_array_string"
 
         for plugin_cmd in "${plugins[@]}"; do
-            if [[ -z "$plugin_cmd" ]]; then continue; fi
+            if [[ -z "$plugin_cmd" ]]; then continue; }
             
             if [[ "$plugin_cmd" =~ git\ clone\ (.*)\ (.*) ]]; then
                 repo_url="${BASH_REMATCH[1]}"
@@ -1180,12 +1211,12 @@ run_custom_injections() {
     IFS=$'\n' read -rd '' -a injections <<< "$injections_array_string"
     
     for injection in "${injections[@]}"; do
-        if [[ -z "$injection" ]]; then continue; fi 
+        if [[ -z "$injection" ]]; then continue; } 
         
         local script_command=$(echo "$injection" | awk '{print $1}')
         local stage_id=$(echo "$injection" | awk '{print $2}')
         
-        if [[ "$stage_id" != "$target_stage_id" ]]; then continue; fi
+        if [[ "$stage_id" != "$target_stage_id" ]]; then continue; }
         
         executed_count=$((executed_count + 1))
         local script_name
@@ -1308,7 +1339,7 @@ archive_firmware_and_logs() {
     else
         echo "❌ 错误: zip 文件创建失败。"
         return 1
-    fi
+    }
 }
 
 # --- 脚本执行入口 ---
