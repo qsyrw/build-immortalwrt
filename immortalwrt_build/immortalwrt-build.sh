@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ==========================================================
-# 🔥 ImmortalWrt/OpenWrt ▪ 固件编译管理脚本 V4.9.5 (自启脚本模块化)
+# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.5 (语法修复版)
+# - 修复：config_interaction 函数中 case 4) 模块的 Bash 语法错误 (endif -> fi)。
 # - 优化：移除硬编码的 AUTORUN_A/B 功能，完全依赖 Custom Injections。
-# - 兼容性：使用子 Shell 中的 'cd' 代替 pushd/popd。
 # ==========================================================
 
 # --- 变量定义 ---
@@ -24,7 +24,6 @@ BUILD_LOG_PATH=""
 BUILD_TIME_STAMP=$(date +%Y%m%d_%H%M)
 
 # 所有配置变量的名称列表
-# 已移除 AUTORUN_A_ENABLE, AUTORUN_A_IP, AUTORUN_B_ENABLE, AUTORUN_B_IP
 CONFIG_VAR_NAMES=(FW_TYPE FW_BRANCH CONFIG_FILE_NAME EXTRA_PLUGINS CUSTOM_INJECTIONS ENABLE_QMODEM ENABLE_TURBOACC)
 
 
@@ -205,7 +204,6 @@ config_interaction() {
     : ${config_vars[CUSTOM_INJECTIONS]:=""}
     : ${config_vars[ENABLE_QMODEM]:="n"}
     : ${config_vars[ENABLE_TURBOACC]:="n"}
-    # 已移除 AUTORUN_A/B 相关的默认值
     
     # 交互循环
     while true; do
@@ -230,7 +228,6 @@ config_interaction() {
         echo "6. [${config_vars[ENABLE_TURBOACC]^^}] 内置 Turboacc"
         
         # --- 新增功能项 ---
-        # 原选项 7, 8 (自启脚本) 已移除，原 9 变为 7
         echo -e "\n7. ⚙️ **运行 Menuconfig** (生成/编辑差异配置)"
 
         echo "-----------------------------------------------------"
@@ -289,7 +286,7 @@ config_interaction() {
                 while IFS= read -r line; do
                     if [[ "$line" == "END" ]]; then
                         break
-                    endif
+                    fi # <--- 修复点: 将 'endif' 改为 'fi'
                     if [[ -n "$line" ]]; then
                         new_injections+="$line"$'\n'
                     fi
@@ -525,7 +522,7 @@ run_menuconfig_and_save() {
     return $? # 返回子 Shell 的退出状态码
 }
 
-# 3.5 清理源码目录 (使用 cd)
+# 3.4 清理源码目录 (使用 cd)
 clean_source_dir() {
     local SOURCE_DIR="$1"
 
@@ -1035,7 +1032,6 @@ execute_build() {
         make defconfig || (echo "错误: make defconfig 失败。" >> "$BUILD_LOG_PATH" && exit 1)
         
         # --- 8. 注入点: Stage 850 (导入 config 后) ---
-        # **注意:** 首次开机自启脚本现在由这里注入的子脚本来处理
         run_custom_injections "${VARS[CUSTOM_INJECTIONS]}" "850"
         
         # --- 8.5 强制清除 NAT 冲突配置 ---
@@ -1048,7 +1044,6 @@ execute_build() {
 
         # --- 9. 配置/编译 ---
         echo -e "\n--- 9. 开始编译 (线程数: $JOBS_N) ---"
-        # 原 create_autorun_script 调用已移除，由 Stage 850 中的自定义脚本替代
         make defconfig # 再次运行确保所有清理/注入后的依赖关系正确更新
         
         # 核心编译命令，输出到日志文件
@@ -1243,10 +1238,6 @@ run_custom_injections() {
     fi
     )
 }
-
-# 5.4 创建首次开机自启脚本
-# **此功能已完全移除，由 Custom Injections 替代。**
-
 
 # 5.5 归档固件和日志文件 (使用 cd)
 archive_firmware_and_logs() {
