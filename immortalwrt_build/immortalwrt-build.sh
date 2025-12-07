@@ -335,7 +335,6 @@ config_interaction() {
         esac
     done
 }
-
 # 3.4 运行 menuconfig 并保存文件 (V4.5 自动转换 .config)
 run_menuconfig_and_save() {
     local CONFIG_NAME="$1"
@@ -344,6 +343,7 @@ run_menuconfig_and_save() {
     
     # 获取用户指定的配置文件名
     local USER_CONFIG_FILE_NAME=$(grep 'CONFIG_FILE_NAME="' "$CONFIG_FILE" | cut -d'"' -f2)
+    # V4.9.7 修正：即使在 config_interaction 中更改了默认后缀，这里也必须基于用户配置的文件名
     local SOURCE_CONFIG_PATH="$USER_CONFIG_DIR/$USER_CONFIG_FILE_NAME"
     
     # 确定最终要生成的差异文件名
@@ -370,13 +370,19 @@ run_menuconfig_and_save() {
              exit 1
         fi
         
+        # V4.9.7 修正：强制在任何 make/defconfig/menuconfig 之前运行 feeds update/install
+        # 确保系统能识别所有 Target 和 Subtarget。
+        echo "--- 正在更新/安装 Feeds 以加载所有 Target/Subtarget 信息 ---"
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
         # 2. 准备配置并运行 menuconfig
         if [ -f "$SOURCE_CONFIG_PATH" ]; then
             
-            # --- V4.5 自动转换逻辑 ---
+            # --- 配置文件加载逻辑 ---
             if [[ "$USER_CONFIG_FILE_NAME" != *.diffconfig ]] && [[ "$USER_CONFIG_FILE_NAME" == *.config ]]; then
                 echo -e "\n🚨 自动转换: 检测到文件 [$USER_CONFIG_FILE_NAME] 是一个完整的 .config 文件。"
-                echo "将自动执行 [make defconfig] 和 [make savedefconfig] 转换成差异配置..."
+                echo "将自动执行 [make defconfig] 修正并启动 menuconfig..."
                 
                 # 复制完整 config 到 .config (Menuconfig 需要 .config)
                 cp "$SOURCE_CONFIG_PATH" ".config"
@@ -384,8 +390,6 @@ run_menuconfig_and_save() {
                 # 运行 defconfig 来修正依赖关系
                 make defconfig || (echo "错误: make defconfig 失败。"; exit 1)
                 
-                echo "完整配置已加载。现在启动 menuconfig..."
-            
             elif [[ "$USER_CONFIG_FILE_NAME" == *.diffconfig ]]; then
                 echo "检测到差异配置 ($USER_CONFIG_FILE_NAME)，将其复制为 defconfig 并加载。"
                 
@@ -394,90 +398,22 @@ run_menuconfig_and_save() {
                 
                 # 运行 defconfig 来导入差异配置并创建完整的 .config
                 make defconfig || (echo "错误: make defconfig 失败。"; exit 1)
-                
-                echo "差异配置已加载，现在启动 menuconfig..."
 
             else
                 echo "警告: 配置文件 [$USER_CONFIG_FILE_NAME] 格式未知，将尝试按差异配置加载。"
                 cp "$SOURCE_CONFIG_PATH" defconfig
                 make defconfig || (echo "错误: make defconfig 失败。"; exit 1)
             fi
-            # --- 自动转换逻辑结束 ---
+            echo "现有配置已加载。现在启动 menuconfig..."
 
         else
-            echo "未找到现有配置 ($SOURCE_CONFIG_PATH)，开始初始化配置。"
+            # --- 首次配置/无配置加载逻辑 (已简化) ---
+            echo "未找到现有配置 ($SOURCE_CONFIG_PATH)，开始初始化默认配置。"
             
-            # 2.1 运行 feeds update/install 确保 defconfig 成功
-            ./scripts/feeds update -a
-            ./scripts/feeds install -a
-
-            # 2.2 【V3.9 新增】目标架构选择
-            clear
-            echo "--- 🎯 请选择目标架构 (Target System) ---"
-            # 过滤掉非目录、空目录和特殊目录
-            local targets=$(find target/linux/ -maxdepth 1 -type d ! -name "generic" -a ! -name "packages" -a ! -name "target" -a ! -name "image" -a ! -name "targets" -a ! -name "target" -printf "%f\n" | sort)
-            
-            local i=1
-            local target_list=()
-            for t in $targets; do
-                echo "$i) $t"
-                target_list[i]="$t"
-                i=$((i + 1))
-            done
-            
-            read -p "请输入序号选择目标架构 (1-$(($i-1))): " target_choice
-            
-            local SELECTED_TARGET
-            if [[ "$target_choice" =~ ^[0-9]+$ ]] && [ "$target_choice" -ge 1 ] && [ "$target_choice" -le ${#target_list[@]} ]; then
-                SELECTED_TARGET="${target_list[$target_choice]}"
-                echo "选择的目标架构: **$SELECTED_TARGET**"
-            else
-                echo "无效选择，将默认选择第一个架构或通用架构。"
-                SELECTED_TARGET="${target_list[1]}"
-            fi
-            
-            # 写入基本的 target system 配置
-            echo "CONFIG_TARGET_$SELECTED_TARGET=y" > defconfig # 写入 defconfig 文件
-            echo "CONFIG_TARGET_BOARD=\"$SELECTED_TARGET\"" >> defconfig
-
-            # 运行 defconfig 来加载该架构的默认配置（生成 .config）
+            # 运行 make defconfig 加载源码默认配置
             make defconfig || (echo "错误: make defconfig 失败。"; exit 1)
-
-            # 2.3 【V3.9 新增】目标子类型选择
-            clear
-            echo "--- 💻 请选择目标子类型/机型 (Target Profile) ---"
-            # 查找所有 PROFILE 配置项 (可能有多个，需要用户选择具体机型)
-            local profiles=$(grep -oP 'CONFIG_TARGET_\w+_\w+=\\y' .config | grep -oP 'CONFIG_TARGET_\K[^=]+' | sed 's/_IMG//g' | sort)
             
-            local j=1
-            local profile_list=()
-            for p in $profiles; do
-                if [[ "$p" != "$SELECTED_TARGET" ]]; then
-                    local short_profile_name=$(echo "$p" | awk -F_ '{print $NF}')
-                    echo "$j) $p ($short_profile_name)"
-                    profile_list[j]="$p"
-                    j=$((j + 1))
-                fi
-            done
-
-            local SELECTED_PROFILE
-            read -p "请输入序号选择目标子类型 (1-$(($j-1)), 默认 ${profile_list[1]}): " profile_choice
-            
-            if [[ "$profile_choice" =~ ^[0-9]+$ ]] && [ "$profile_choice" -ge 1 ] && [ "$profile_choice" -le ${#profile_list[@]} ]; then
-                SELECTED_PROFILE="${profile_list[$profile_choice]}"
-                echo "选择的子类型: **$SELECTED_PROFILE**"
-            else
-                echo "无效选择，将默认选择第一个子类型。"
-                SELECTED_PROFILE="${profile_list[1]}"
-            fi
-            
-            # 写入最终的 target profile 配置
-            echo "CONFIG_TARGET_$SELECTED_PROFILE=y" >> defconfig
-            echo "CONFIG_ALL_KMODS=y" >> defconfig
-            echo "CONFIG_ALL=y" >> defconfig
-            
-            # 再次运行 defconfig 确保所有依赖项加载
-            make defconfig || (echo "错误: make defconfig (二次) 失败。"; exit 1)
+            echo "已加载源码默认配置。请在 menuconfig 中选择目标平台和机型。"
         fi
 
         echo "--- 请在弹出的界面中进行配置，保存并退出 ---"
@@ -486,11 +422,12 @@ run_menuconfig_and_save() {
         
         local menuconfig_status=$?
         
-        # 3. 复制生成的配置并保存 (V4.5 确保保存的是差异配置)
+        # 3. 复制生成的配置并保存 (总是生成差异文件)
         if [ "$menuconfig_status" -eq 0 ]; then
             if [ -f "$SOURCE_DIR/.config" ]; then
                 
-                # 【V4.5 核心】运行 make savedefconfig 生成差异文件 (总是生成)
+                # 【核心】运行 make savedefconfig 生成差异文件 
+                echo "正在生成差异配置 (.diffconfig)..."
                 make savedefconfig || (echo "错误: make savedefconfig 失败。"; exit 1)
                 
                 # 将生成的 defconfig 复制并重命名为目标差异文件
@@ -501,6 +438,7 @@ run_menuconfig_and_save() {
                 # 确保配置文件的 CONFIG_FILE_NAME 变量被更新为正确的 .diffconfig 文件名
                 local FINAL_DIFF_FILE_NAME=$(basename "$TARGET_DIFF_FILE")
                 
+                # 【V4.9.7 修正】确保 sed 替换只影响 CONFIG_FILE_NAME 变量
                 sed -i "s/^CONFIG_FILE_NAME=.*$/CONFIG_FILE_NAME=\"$FINAL_DIFF_FILE_NAME\"/" "$CONFIG_FILE"
                 
                 # 如果用户最初提供的是 x86.config，我们应该删除它，只保留 x86.diffconfig
@@ -727,8 +665,10 @@ clone_or_update_source() {
             cd "$SOURCE_DIR" || exit 1
             git fetch origin "$FW_BRANCH" --depth 1 || echo "警告: 浅拉取失败，尝试常规拉取..."
             git checkout "$FW_BRANCH" || (echo "错误: 分支切换失败。" >> "$BUILD_LOG_PATH" && exit 1)
-            git config core.sparseCheckout true
-            git sparse-checkout checkout || git pull || echo "警告: 稀疏检出/常规 pull 失败，但继续。"
+            
+            # --- 【V4.9.7 修正】移除有问题的 'git sparse-checkout checkout'
+            # 依赖 git pull 来更新已存在的稀疏检出仓库
+            git pull origin "$FW_BRANCH" || echo "警告: 稀疏检出/常规 pull 失败，但继续。"
         ) || return 1
 
     else
@@ -763,6 +703,7 @@ clone_or_update_source() {
 /Config.in
 EOF
             
+            # 首次拉取
             git pull origin "$FW_BRANCH" --depth 1 || (echo "错误: Git 稀疏拉取失败，尝试全量克隆..." >> "$BUILD_LOG_PATH" && {
                 # 如果稀疏拉取失败，退回上级目录，删除目录，进行全量克隆
                 cd ..
