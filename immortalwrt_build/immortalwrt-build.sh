@@ -415,6 +415,82 @@ run_menuconfig_and_save() {
             fi
             echo "现有配置已加载。现在启动 menuconfig..."
 
+# 3.4 运行 menuconfig 并保存文件 (V4.9.12 修正：使用 diffconfig.sh)
+run_menuconfig_and_save() {
+    local CONFIG_NAME="$1"
+    local FW_BRANCH="$2"
+    local CONFIG_FILE="$CONFIGS_DIR/$CONFIG_NAME.conf"
+    
+    # 获取用户指定的配置文件名
+    local USER_CONFIG_FILE_NAME=$(grep 'CONFIG_FILE_NAME="' "$CONFIG_FILE" | cut -d'"' -f2)
+    local SOURCE_CONFIG_PATH="$USER_CONFIG_DIR/$USER_CONFIG_FILE_NAME"
+    
+    # 确定最终要生成的差异文件名
+    local TARGET_DIFF_FILE="$USER_CONFIG_DIR/$USER_CONFIG_FILE_NAME"
+    if [[ "$USER_CONFIG_FILE_NAME" != *.diffconfig ]]; then
+        # 如果用户指定的是 x86.config，我们最终生成的差异文件应该命名为 x86.diffconfig
+        TARGET_DIFF_FILE="${SOURCE_CONFIG_PATH%.*}.diffconfig"
+    fi
+
+    echo -e "\n--- 🔧 启动 Menuconfig 配置工具 ---"
+    
+    # 1. 检查或拉取源码环境
+    local FW_TYPE=$(grep 'FW_TYPE="' "$CONFIG_FILE" | cut -d'"' -f2)
+    
+    # 调用源码拉取函数，它会设置 CURRENT_SOURCE_DIR 环境变量
+    if ! clone_or_update_source "$FW_TYPE" "$FW_BRANCH" "$CONFIG_NAME"; then
+        echo "错误: 源码拉取/更新失败，无法启动 menuconfig。"
+        return 1
+    fi # <--- 修正点：将 '}' 改为 'fi'
+    
+    # 获取 CURRENT_SOURCE_DIR 变量
+    local CURRENT_SOURCE_DIR_LOCAL="$CURRENT_SOURCE_DIR"
+
+    # 使用子 shell 进入源码目录，并执行 menuconfig
+    # 注意：这里使用 $CURRENT_SOURCE_DIR_LOCAL
+    (
+        local CURRENT_SOURCE_DIR="$CURRENT_SOURCE_DIR_LOCAL"
+        
+        if ! cd "$CURRENT_SOURCE_DIR"; then
+             echo "错误: 无法进入源码目录。"
+             exit 1
+        fi
+        
+        # V4.9.7 修正：强制在任何 make/defconfig/menuconfig 之前运行 feeds update/install
+        echo "--- 正在更新/安装 Feeds 以加载所有 Target/Subtarget 信息 ---"
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+        # 2. 准备配置并运行 menuconfig
+        if [ -f "$SOURCE_CONFIG_PATH" ]; then
+            
+            # --- 配置文件加载逻辑 ---
+            if [[ "$USER_CONFIG_FILE_NAME" != *.diffconfig ]] && [[ "$USER_CONFIG_FILE_NAME" == *.config ]]; then
+                echo -e "\n🚨 自动转换: 检测到文件 [$USER_CONFIG_FILE_NAME] 是一个完整的 .config 文件。"
+                echo "将自动执行 [make defconfig] 修正并启动 menuconfig..."
+                
+                # 复制完整 config 到 .config (Menuconfig 需要 .config)
+                cp "$SOURCE_CONFIG_PATH" ".config"
+
+                # 运行 defconfig 来修正依赖关系
+                make defconfig || (echo "错误: make defconfig 失败。"; exit 1)
+                
+            elif [[ "$USER_CONFIG_FILE_NAME" == *.diffconfig ]]; then
+                echo "检测到差异配置 ($USER_CONFIG_FILE_NAME)，将其复制为 defconfig 并加载。"
+                
+                # 将差异文件复制为 defconfig
+                cp "$SOURCE_CONFIG_PATH" defconfig
+                
+                # 运行 defconfig 来导入差异配置并创建完整的 .config
+                make defconfig || (echo "错误: make defconfig 失败。"; exit 1)
+
+            else
+                echo "警告: 配置文件 [$USER_CONFIG_FILE_NAME] 格式未知，将尝试按差异配置加载。"
+                cp "$SOURCE_CONFIG_PATH" defconfig
+                make defconfig || (echo "错误: make defconfig 失败。"; exit 1)
+            fi
+            echo "现有配置已加载。现在启动 menuconfig..."
+
         else
             # --- 首次配置/无配置加载逻辑 (已简化) ---
             echo "未找到现有配置 ($SOURCE_CONFIG_PATH)，开始初始化默认配置。"
