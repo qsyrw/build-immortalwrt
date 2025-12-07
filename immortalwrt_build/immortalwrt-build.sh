@@ -6,7 +6,8 @@
 # - 优化: 改进插件/注入脚本管理 (支持 URL 自动下载)。
 # - 优化: 新增批量构建队列。
 # - 优化: 增强错误日志解析，新增固件清理工具。
-# - 修复: manage_injections_menu 语法错误。
+# - 修复: manage_injections_menu 语法错误 (V4.9.18 修复)。
+# - 修复: execute_build 插件拉取循环中的 if 语法错误 (本次修复)。
 # ==========================================================
 
 # --- 变量定义 ---
@@ -874,7 +875,8 @@ execute_build() {
         IFS=$'\n' read -rd '' -a plugins <<< "$plugins_array_string"
 
         for plugin_cmd in "${plugins[@]}"; do
-            if [[ -z "$plugin_cmd" ]]; then continue; }
+            # 修复：将 } 替换为 fi
+            if [[ -z "$plugin_cmd" ]]; then continue; fi 
             
             if [[ "$plugin_cmd" =~ git\ clone\ (.*)\ (.*) ]]; then
                 repo_url="${BASH_REMATCH[1]}"
@@ -1100,7 +1102,7 @@ run_custom_injections() {
     local CURRENT_SOURCE_DIR="$3" # 接收动态源码目录
     local executed_count=0
     
-    if [[ -z "$all_injections" ]]; then return 0; }
+    if [[ -z "$all_injections" ]]; then return 0; fi
     
     echo -e "\n--- [Stage $target_stage_id] 执行自定义注入脚本 ---"
     
@@ -1434,7 +1436,7 @@ manage_injections_menu() {
                             script_files[$s_i]="$filename"
                             s_i=$((s_i + 1))
                         fi
-                    done # ⬅️ 修复：这里缺少了 'done' 
+                    done 
                 else
                     echo "   ( $EXTRA_SCRIPT_DIR 目录中没有可用的 .sh 脚本 )"
                     read -p "按任意键返回..."
