@@ -289,7 +289,7 @@ config_interaction() {
                 while IFS= read -r line; do
                     if [[ "$line" == "END" ]]; then
                         break
-                    }
+                        
                     if [[ -n "$line" ]]; then
                         new_injections+="$line"$'\n'
                     fi
