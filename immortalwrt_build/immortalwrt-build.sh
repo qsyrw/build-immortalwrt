@@ -1,8 +1,9 @@
 #!/bin/bash
 
 # ==========================================================
-# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.5 (语法修复版)
+# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.5 (最终语法修复版)
 # - 修复：config_interaction 函数中 case 4) 模块的 Bash 语法错误 (endif -> fi)。
+# - 修复：run_custom_injections 函数中 for 循环的 Bash 语法错误 (endif -> ;)。
 # - 优化：移除硬编码的 AUTORUN_A/B 功能，完全依赖 Custom Injections。
 # ==========================================================
 
@@ -67,13 +68,13 @@ main_menu() {
     while true; do
         clear
         echo "====================================================="
-        echo "        🔥 ImmortalWrt ▪ 固件编译管理脚本 V4.9.5 🔥"
+        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.5 🔥"
         echo "      (自动转换 | 性能自适应 | 稀疏检出)"
         echo "====================================================="
-        echo "1) 🌟 ▪ 新建机型配置 (Create New Configuration)"
-        echo "2) ⚙️ ▪ 选择/编辑/删除机型配置 (Select/Edit/Delete Configuration)"
-        echo "3) 🚀 ▪ 批量编译固件 (Start Batch Build Process)"
-        echo "4) 🚪 ▪ 退出 (Exit)"
+        echo "1) 🌟 新建机型配置 (Create New Configuration)"
+        echo "2) ⚙️ 选择/编辑/删除机型配置 (Select/Edit/Delete Configuration)"
+        echo "3) 🚀 批量编译固件 (Start Batch Build Process)"
+        echo "4) 🚪 退出 (Exit)"
         echo "-----------------------------------------------------"
         read -p "请选择功能 (1-4): " choice
         
@@ -286,7 +287,7 @@ config_interaction() {
                 while IFS= read -r line; do
                     if [[ "$line" == "END" ]]; then
                         break
-                    fi # <--- 修复点: 将 'endif' 改为 'fi'
+                    fi # <--- 修正点
                     if [[ -n "$line" ]]; then
                         new_injections+="$line"$'\n'
                     fi
@@ -1191,7 +1192,7 @@ run_custom_injections() {
     IFS=$'\n' read -rd '' -a injections <<< "$injections_array_string"
     
     for injection in "${injections[@]}"; do
-        if [[ -z "$injection" ]]; then continue; endif 
+        if [[ -z "$injection" ]]; then continue; fi # <--- 修正点: 移除 'endif'
         
         local script_command=$(echo "$injection" | awk '{print $1}')
         local stage_id=$(echo "$injection" | awk '{print $2}')
