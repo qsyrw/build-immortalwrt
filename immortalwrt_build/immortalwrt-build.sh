@@ -2,11 +2,11 @@
 
 # ==========================================================
 # 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.18 (完整优化版)
-# - 移除 make menuconfig，纯 .config 编译。
 # - 优化: ccache 加速，环境变量隔离，增强依赖检查。
 # - 优化: 改进插件/注入脚本管理 (支持 URL 自动下载)。
 # - 优化: 新增批量构建队列。
 # - 优化: 增强错误日志解析，新增固件清理工具。
+# - 修复: manage_injections_menu 语法错误。
 # ==========================================================
 
 # --- 变量定义 ---
@@ -709,7 +709,7 @@ build_queue_menu() {
                             if [ "$item" != "$config_name_to_toggle" ]; then
                                 new_queue+=("$item")
                             fi
-                        end
+                        done
                         queue=("${new_queue[@]}")
                         echo "配置 [$config_name_to_toggle] 已从队列中移除。"
                     else
@@ -1217,7 +1217,7 @@ archive_firmware_and_logs() {
             echo "$FILENAME"
 
             cp "$file" "$TEMP_ARCHIVE_DIR/firmware/$NEW_FILENAME" || echo "警告: 复制文件失败: $FILENAME"
-        end
+        done
         echo "--------------------------"
         
         if [ "$FIRMWARE_COUNT" -eq 0 ]; then
@@ -1377,7 +1377,7 @@ manage_plugins_menu() {
 }
 
 
-# 5.7 脚本注入管理子菜单 (V4.9.18 增强版)
+# 5.7 脚本注入管理子菜单 (V4.9.18 增强版/修复版)
 manage_injections_menu() {
     local -n vars_array=$1 # 引用主配置数组
     
@@ -1434,7 +1434,7 @@ manage_injections_menu() {
                             script_files[$s_i]="$filename"
                             s_i=$((s_i + 1))
                         fi
-                    done
+                    done # ⬅️ 修复：这里缺少了 'done' 
                 else
                     echo "   ( $EXTRA_SCRIPT_DIR 目录中没有可用的 .sh 脚本 )"
                     read -p "按任意键返回..."
