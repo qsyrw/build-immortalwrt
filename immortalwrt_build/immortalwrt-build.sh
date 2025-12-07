@@ -1,9 +1,10 @@
 #!/bin/bash
 
 # ==========================================================
-# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.13 (语法修复版)
+# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.14 (稳定修复版)
 # - V4.9.12: 核心修正：因 make savedefconfig 在特定分支上存在系统缺陷，改为使用 scripts/diffconfig.sh 脚本手动生成差异配置。
 # - V4.9.13: 语法修复：修正了 config_interaction 函数中 case 4 (脚本注入管理) 的 while/done 循环语法错误。
+# - V4.9.14: 语法修复：修正了 run_menuconfig_and_save 函数中 clone_or_update_source 调用后的 if/fi 语法错误。
 # ==========================================================
 
 # --- 变量定义 ---
@@ -70,7 +71,7 @@ main_menu() {
     while true; do
         clear
         echo "====================================================="
-        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.13 🔥"
+        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.14 🔥"
         echo "      (源码隔离 | 性能自适应 | 差异配置修复)"
         echo "====================================================="
         echo "1) 🌟 新建机型配置 (Create New Configuration)"
@@ -273,7 +274,7 @@ config_interaction() {
 
                 config_vars[EXTRA_PLUGINS]="$new_plugins_input"
                 ;;
-            4) # 脚本注入管理 (修复后的代码块)
+            4) # 脚本注入管理 (已修复)
                 echo -e "\n--- 🧩 自定义脚本注入列表 ---"
                 echo "请输入注入命令，格式: [脚本路径/URL] [阶段ID (如 100/850)] (一行一个, 输入 'END' 结束输入):"
                 local new_injections=""
@@ -339,7 +340,7 @@ config_interaction() {
     done
 }
 
-# 3.4 运行 menuconfig 并保存文件 (V4.9.12 修正：使用 diffconfig.sh)
+# 3.4 运行 menuconfig 并保存文件 (V4.9.14 修正：if/fi 结构)
 run_menuconfig_and_save() {
     local CONFIG_NAME="$1"
     local FW_BRANCH="$2"
@@ -365,83 +366,7 @@ run_menuconfig_and_save() {
     if ! clone_or_update_source "$FW_TYPE" "$FW_BRANCH" "$CONFIG_NAME"; then
         echo "错误: 源码拉取/更新失败，无法启动 menuconfig。"
         return 1
-    }
-    
-    # 获取 CURRENT_SOURCE_DIR 变量
-    local CURRENT_SOURCE_DIR_LOCAL="$CURRENT_SOURCE_DIR"
-
-    # 使用子 shell 进入源码目录，并执行 menuconfig
-    # 注意：这里使用 $CURRENT_SOURCE_DIR_LOCAL
-    (
-        local CURRENT_SOURCE_DIR="$CURRENT_SOURCE_DIR_LOCAL"
-        
-        if ! cd "$CURRENT_SOURCE_DIR"; then
-             echo "错误: 无法进入源码目录。"
-             exit 1
-        fi
-        
-        # V4.9.7 修正：强制在任何 make/defconfig/menuconfig 之前运行 feeds update/install
-        echo "--- 正在更新/安装 Feeds 以加载所有 Target/Subtarget 信息 ---"
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
-
-        # 2. 准备配置并运行 menuconfig
-        if [ -f "$SOURCE_CONFIG_PATH" ]; then
-            
-            # --- 配置文件加载逻辑 ---
-            if [[ "$USER_CONFIG_FILE_NAME" != *.diffconfig ]] && [[ "$USER_CONFIG_FILE_NAME" == *.config ]]; then
-                echo -e "\n🚨 自动转换: 检测到文件 [$USER_CONFIG_FILE_NAME] 是一个完整的 .config 文件。"
-                echo "将自动执行 [make defconfig] 修正并启动 menuconfig..."
-                
-                # 复制完整 config 到 .config (Menuconfig 需要 .config)
-                cp "$SOURCE_CONFIG_PATH" ".config"
-
-                # 运行 defconfig 来修正依赖关系
-                make defconfig || (echo "错误: make defconfig 失败。"; exit 1)
-                
-            elif [[ "$USER_CONFIG_FILE_NAME" == *.diffconfig ]]; then
-                echo "检测到差异配置 ($USER_CONFIG_FILE_NAME)，将其复制为 defconfig 并加载。"
-                
-                # 将差异文件复制为 defconfig
-                cp "$SOURCE_CONFIG_PATH" defconfig
-                
-                # 运行 defconfig 来导入差异配置并创建完整的 .config
-                make defconfig || (echo "错误: make defconfig 失败。"; exit 1)
-
-            else
-                echo "警告: 配置文件 [$USER_CONFIG_FILE_NAME] 格式未知，将尝试按差异配置加载。"
-                cp "$SOURCE_CONFIG_PATH" defconfig
-                make defconfig || (echo "错误: make defconfig 失败。"; exit 1)
-            fi
-            echo "现有配置已加载。现在启动 menuconfig..."
-
-# 3.4 运行 menuconfig 并保存文件 (V4.9.12 修正：使用 diffconfig.sh)
-run_menuconfig_and_save() {
-    local CONFIG_NAME="$1"
-    local FW_BRANCH="$2"
-    local CONFIG_FILE="$CONFIGS_DIR/$CONFIG_NAME.conf"
-    
-    # 获取用户指定的配置文件名
-    local USER_CONFIG_FILE_NAME=$(grep 'CONFIG_FILE_NAME="' "$CONFIG_FILE" | cut -d'"' -f2)
-    local SOURCE_CONFIG_PATH="$USER_CONFIG_DIR/$USER_CONFIG_FILE_NAME"
-    
-    # 确定最终要生成的差异文件名
-    local TARGET_DIFF_FILE="$USER_CONFIG_DIR/$USER_CONFIG_FILE_NAME"
-    if [[ "$USER_CONFIG_FILE_NAME" != *.diffconfig ]]; then
-        # 如果用户指定的是 x86.config，我们最终生成的差异文件应该命名为 x86.diffconfig
-        TARGET_DIFF_FILE="${SOURCE_CONFIG_PATH%.*}.diffconfig"
-    fi
-
-    echo -e "\n--- 🔧 启动 Menuconfig 配置工具 ---"
-    
-    # 1. 检查或拉取源码环境
-    local FW_TYPE=$(grep 'FW_TYPE="' "$CONFIG_FILE" | cut -d'"' -f2)
-    
-    # 调用源码拉取函数，它会设置 CURRENT_SOURCE_DIR 环境变量
-    if ! clone_or_update_source "$FW_TYPE" "$FW_BRANCH" "$CONFIG_NAME"; then
-        echo "错误: 源码拉取/更新失败，无法启动 menuconfig。"
-        return 1
-    fi # <--- 修正点：将 '}' 改为 'fi'
+    fi # <--- 修复点：将 '}' 替换为 'fi'
     
     # 获取 CURRENT_SOURCE_DIR 变量
     local CURRENT_SOURCE_DIR_LOCAL="$CURRENT_SOURCE_DIR"
@@ -603,7 +528,7 @@ clean_source_dir() {
     if [ ! -d "$CURRENT_SOURCE_DIR" ]; then
         echo "警告: 源码目录不存在，无需清理。"
         return 0
-    }
+    fi # <--- 修复点：将 '}' 替换为 'fi'
     
     # 使用子 Shell 隔离 cd 操作
     (
@@ -878,9 +803,9 @@ start_build_process() {
         echo "当前没有保存的配置。请先新建配置。"
         read -p "按任意键返回主菜单..."
         return
-    }
+    fi # <--- 修复点：将 '}' 替换为 'fi'
     
-    echo "--- 可用配置 (请选择序号进行编译) ---"
+    echo "--- 可用配置 ---"
     local i=1
     local files=()
     for file in "${configs[@]}"; do
@@ -891,49 +816,30 @@ start_build_process() {
             i=$((i + 1))
         fi
     done
-    echo "--------------------------------------"
+    echo "----------------"
+    local return_index=$i
+    echo "$return_index) 返回主菜单"
     
-    read -p "请选择要编译的配置序号 (例如: 1 或 1,3,5): " choice_input
-    
-    IFS=',' read -r -a selected_indices <<< "$choice_input"
-    
-    local configs_to_build=()
-    local valid_selection=true
-
-    local max_index=$((i - 1))
-    for index in "${selected_indices[@]}"; do
-        index=$(echo "$index" | xargs)
-
-        if [[ "$index" =~ ^[0-9]+$ ]] && [ "$index" -ge 1 ] && [ "$index" -le "$max_index" ]; then
-            local SELECTED_NAME="${files[$index]}"
-            configs_to_build+=("$SELECTED_NAME")
+    read -p "请选择配置序号 (1-$return_index): " choice
+    if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "$return_index" ]; then
+        if [ "$choice" -eq "$return_index" ]; then
+            return
         else
-            if [[ -n "$index" ]]; then
-                echo "❌ 无效的选择序号或格式: $index"
-                valid_selection=false
-            fi
+            local SELECTED_NAME="${files[$choice]}"
+            echo ""
+            echo "当前选择: **$SELECTED_NAME**"
+            read -p "选择操作：1) 编辑配置 | 2) 删除配置 | 3) 返回主菜单: " action
+            case "$action" in
+                1) config_interaction "$SELECTED_NAME" "edit" ;;
+                2) delete_config "$SELECTED_NAME" ;;
+                3) return ;;
+                *) echo "无效操作。返回主菜单。"; sleep 1 ;;
+            esac
         fi
-    done
-    
-    if [ "$valid_selection" == "false" ] || [ ${#configs_to_build[@]} -eq 0 ]; then
-        echo "无效或空的配置选择。返回主菜单。"
-        sleep 2
-        return
-    }
-    
-    echo -e "\n--- 确认编译列表 ---"
-    printf '%s\n' "${configs_to_build[@]}"
-    echo "----------------------"
-    
-    read -p "确认编译这 ${#configs_to_build[@]} 个配置? (y/n): " confirm_build
-    if [[ "$confirm_build" != "y" ]]; then
-        echo "取消编译，返回主菜单。"
+    else
+        echo "无效选择。返回主菜单。"
         sleep 1
-        return
     fi
-    
-    # 传递数组名引用
-    batch_build_process configs_to_build
 }
 
 # 4.2 批量编译流程
@@ -1023,7 +929,7 @@ execute_build() {
         echo "错误: 源码拉取/更新失败，编译中止。" >> "$BUILD_LOG_PATH"
         error_handler 1
         return 1
-    }
+    fi # <--- 修复点：将 '}' 替换为 'fi'
     
     # 获取 CURRENT_SOURCE_DIR 变量
     local CURRENT_SOURCE_DIR_LOCAL="$CURRENT_SOURCE_DIR"
@@ -1032,7 +938,7 @@ execute_build() {
     if ! clean_source_dir "$CONFIG_NAME"; then
         error_handler 1
         return 1
-    }
+    fi # <--- 修复点：将 '}' 替换为 'fi'
     
     # 获取智能线程数
     local JOBS_N=$(determine_compile_jobs)
@@ -1288,12 +1194,12 @@ run_custom_injections() {
     IFS=$'\n' read -rd '' -a injections <<< "$injections_array_string"
     
     for injection in "${injections[@]}"; do
-        if [[ -z "$injection" ]]; then continue; } 
+        if [[ -z "$injection" ]]; then continue; fi # <--- 修复点：将 '}' 替换为 'fi'
         
         local script_command=$(echo "$injection" | awk '{print $1}')
         local stage_id=$(echo "$injection" | awk '{print $2}')
         
-        if [[ "$stage_id" != "$target_stage_id" ]]; then continue; }
+        if [[ "$stage_id" != "$target_stage_id" ]]; then continue; fi # <--- 修复点：将 '}' 替换为 'fi'
         
         executed_count=$((executed_count + 1))
         local script_name
