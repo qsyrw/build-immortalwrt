@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # ==========================================================
-# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.6 (最终语法修复版)
-# - 修复：config_interaction 函数中 case 4) 模块的 Bash 语法错误 (endif -> fi)。
-# - 修复：run_custom_injections 函数中 for 循环的 Bash 语法错误 (endif -> fi)。
-# - 优化：移除硬编码的 AUTORUN_A/B 功能，完全依赖 Custom Injections。
+# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.11 (最终整合版)
+# - V4.9.9: 实现按固件类型/分支隔离源码目录，避免环境冲突。
+# - V4.9.10: 修正 run_menuconfig_and_save 中加入 make oldconfig 修复配置依赖。
+# - V4.9.11: 修正 run_menuconfig_and_save 中 make savedefconfig 返回错误但文件已生成的问题。
 # ==========================================================
 
 # --- 变量定义 ---
@@ -14,7 +14,7 @@ BUILD_ROOT="$HOME/immortalwrt_builder_root"
 
 # 2. 定义所有子目录（绝对路径）
 CONFIGS_DIR="$BUILD_ROOT/profiles"          # 存放 *.conf 配置文件
-SOURCE_DIR="$BUILD_ROOT/source"             # 存放源码
+SOURCE_ROOT="$BUILD_ROOT/source_root"       # 源码的根目录（统一根，实际源码在子目录）
 LOG_DIR="$BUILD_ROOT/logs"                  # 存放编译日志
 USER_CONFIG_DIR="$BUILD_ROOT/user_configs"  # 存放用户自定义的 .config 或 .diffconfig 文件
 EXTRA_SCRIPT_DIR="$BUILD_ROOT/custom_scripts" # 存放自定义注入的本地脚本
@@ -26,6 +26,9 @@ BUILD_TIME_STAMP=$(date +%Y%m%d_%H%M)
 
 # 所有配置变量的名称列表
 CONFIG_VAR_NAMES=(FW_TYPE FW_BRANCH CONFIG_FILE_NAME EXTRA_PLUGINS CUSTOM_INJECTIONS ENABLE_QMODEM ENABLE_TURBOACC)
+
+# 动态变量，用于在编译和配置阶段传递当前源码目录
+CURRENT_SOURCE_DIR=""
 
 
 # --- 核心目录和依赖初始化 ---
@@ -53,7 +56,7 @@ check_and_install_dependencies() {
 ensure_directories() {
     echo "## 检查并创建构建目录..."
     mkdir -p "$CONFIGS_DIR"
-    mkdir -p "$SOURCE_DIR"
+    mkdir -p "$SOURCE_ROOT" # 使用 SOURCE_ROOT
     mkdir -p "$LOG_DIR"
     mkdir -p "$USER_CONFIG_DIR"
     mkdir -p "$EXTRA_SCRIPT_DIR"
@@ -68,13 +71,13 @@ main_menu() {
     while true; do
         clear
         echo "====================================================="
-        echo "        🔥 ImmortalWrt ▪ 固件编译管理脚本 V4.9.6 🔥"
-        echo "      (自动转换 | 性能自适应 | 稀疏检出)"
+        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.11 🔥"
+        echo "      (源码隔离 | 性能自适应 | 稀疏检出)"
         echo "====================================================="
-        echo "1) 🌟 ▪ 新建机型配置 (Create New Configuration)"
-        echo "2) ⚙️ ▪ 选择/编辑/删除机型配置 (Select/Edit/Delete Configuration)"
-        echo "3) 🚀 ▪ 批量编译固件 (Start Batch Build Process)"
-        echo "4) 🚪 ▪ 退出 (Exit)"
+        echo "1) 🌟 新建机型配置 (Create New Configuration)"
+        echo "2) ⚙️ 选择/编辑/删除机型配置 (Select/Edit/Delete Configuration)"
+        echo "3) 🚀 批量编译固件 (Start Batch Build Process)"
+        echo "4) 🚪 退出 (Exit)"
         echo "-----------------------------------------------------"
         read -p "请选择功能 (1-4): " choice
         
@@ -335,7 +338,8 @@ config_interaction() {
         esac
     done
 }
-# 3.4 运行 menuconfig 并保存文件 (V4.5 自动转换 .config)
+
+# 3.4 运行 menuconfig 并保存文件 (V4.9.11 修正)
 run_menuconfig_and_save() {
     local CONFIG_NAME="$1"
     local FW_BRANCH="$2"
@@ -343,7 +347,6 @@ run_menuconfig_and_save() {
     
     # 获取用户指定的配置文件名
     local USER_CONFIG_FILE_NAME=$(grep 'CONFIG_FILE_NAME="' "$CONFIG_FILE" | cut -d'"' -f2)
-    # V4.9.7 修正：即使在 config_interaction 中更改了默认后缀，这里也必须基于用户配置的文件名
     local SOURCE_CONFIG_PATH="$USER_CONFIG_DIR/$USER_CONFIG_FILE_NAME"
     
     # 确定最终要生成的差异文件名
@@ -358,20 +361,26 @@ run_menuconfig_and_save() {
     # 1. 检查或拉取源码环境
     local FW_TYPE=$(grep 'FW_TYPE="' "$CONFIG_FILE" | cut -d'"' -f2)
     
+    # 调用源码拉取函数，它会设置 CURRENT_SOURCE_DIR 环境变量
     if ! clone_or_update_source "$FW_TYPE" "$FW_BRANCH" "$CONFIG_NAME"; then
         echo "错误: 源码拉取/更新失败，无法启动 menuconfig。"
         return 1
     fi
+    
+    # 获取 CURRENT_SOURCE_DIR 变量
+    local CURRENT_SOURCE_DIR_LOCAL="$CURRENT_SOURCE_DIR"
 
     # 使用子 shell 进入源码目录，并执行 menuconfig
+    # 注意：这里使用 $CURRENT_SOURCE_DIR_LOCAL
     (
-        if ! cd "$SOURCE_DIR"; then
+        local CURRENT_SOURCE_DIR="$CURRENT_SOURCE_DIR_LOCAL"
+        
+        if ! cd "$CURRENT_SOURCE_DIR"; then
              echo "错误: 无法进入源码目录。"
              exit 1
         fi
         
         # V4.9.7 修正：强制在任何 make/defconfig/menuconfig 之前运行 feeds update/install
-        # 确保系统能识别所有 Target 和 Subtarget。
         echo "--- 正在更新/安装 Feeds 以加载所有 Target/Subtarget 信息 ---"
         ./scripts/feeds update -a
         ./scripts/feeds install -a
@@ -424,21 +433,33 @@ run_menuconfig_and_save() {
         
         # 3. 复制生成的配置并保存 (总是生成差异文件)
         if [ "$menuconfig_status" -eq 0 ]; then
-            if [ -f "$SOURCE_DIR/.config" ]; then
+            if [ -f "$CURRENT_SOURCE_DIR/.config" ]; then
+
+                # 【V4.9.10 修正】运行 make oldconfig 来修复配置依赖
+                echo "正在运行 make oldconfig 修复依赖关系..."
+                make oldconfig || (echo "警告: make oldconfig 失败，但继续。" >> "$BUILD_LOG_PATH")
                 
-                # 【核心】运行 make savedefconfig 生成差异文件 
+                # 【V4.9.11 修正】运行 make savedefconfig 生成差异文件，并忽略其非致命错误
                 echo "正在生成差异配置 (.diffconfig)..."
-                make savedefconfig || (echo "错误: make savedefconfig 失败。"; exit 1)
+                make savedefconfig 
+                local savedefconfig_status=$?
+
+                # 如果返回非零错误，但文件已生成，则忽略错误继续
+                if [ "$savedefconfig_status" -ne 0 ] && [ -f "$CURRENT_SOURCE_DIR/defconfig" ]; then
+                    echo "警告: make savedefconfig 流程返回错误 ($savedefconfig_status)，但差异配置文件已生成，继续操作。"
+                elif [ "$savedefconfig_status" -ne 0 ]; then
+                    echo "错误: make savedefconfig 失败，且未生成 defconfig 文件。"
+                    exit 1
+                fi
                 
                 # 将生成的 defconfig 复制并重命名为目标差异文件
-                cp "$SOURCE_DIR/defconfig" "$TARGET_DIFF_FILE"
+                cp "$CURRENT_SOURCE_DIR/defconfig" "$TARGET_DIFF_FILE"
 
                 echo -e "\n✅ 差异配置已成功保存到: $TARGET_DIFF_FILE"
                 
                 # 确保配置文件的 CONFIG_FILE_NAME 变量被更新为正确的 .diffconfig 文件名
                 local FINAL_DIFF_FILE_NAME=$(basename "$TARGET_DIFF_FILE")
                 
-                # 【V4.9.7 修正】确保 sed 替换只影响 CONFIG_FILE_NAME 变量
                 sed -i "s/^CONFIG_FILE_NAME=.*$/CONFIG_FILE_NAME=\"$FINAL_DIFF_FILE_NAME\"/" "$CONFIG_FILE"
                 
                 # 如果用户最初提供的是 x86.config，我们应该删除它，只保留 x86.diffconfig
@@ -449,7 +470,7 @@ run_menuconfig_and_save() {
 
                 exit 0
             else
-                echo -e "\n❌ 错误: menuconfig 运行成功，但未在 $SOURCE_DIR 目录下找到生成的 .config 文件。"
+                echo -e "\n❌ 错误: menuconfig 运行成功，但未在 $CURRENT_SOURCE_DIR 目录下找到生成的 .config 文件。"
                 exit 1
             fi
         else
@@ -463,21 +484,27 @@ run_menuconfig_and_save() {
 
 # 3.4 清理源码目录 (使用 cd)
 clean_source_dir() {
-    local SOURCE_DIR="$1"
+    local CONFIG_NAME="$1"
+    local CONFIG_FILE="$CONFIGS_DIR/$CONFIG_NAME.conf"
+    
+    # 从配置文件读取类型和分支
+    local FW_TYPE=$(grep 'FW_TYPE="' "$CONFIG_FILE" | cut -d'"' -f2)
+    local FW_BRANCH=$(grep 'FW_BRANCH="' "$CONFIG_FILE" | cut -d'"' -f2)
+    local CURRENT_SOURCE_DIR="$SOURCE_ROOT/$FW_TYPE/$FW_BRANCH"
 
-    if [ ! -d "$SOURCE_DIR" ]; then
+    if [ ! -d "$CURRENT_SOURCE_DIR" ]; then
         echo "警告: 源码目录不存在，无需清理。"
         return 0
     fi
     
     # 使用子 Shell 隔离 cd 操作
     (
-        cd "$SOURCE_DIR" || { echo "错误: 无法进入源码目录进行清理。"; return 1; }
+        cd "$CURRENT_SOURCE_DIR" || { echo "错误: 无法进入源码目录进行清理。"; return 1; }
 
         while true; do
             clear
             echo "## 🛡️ 源码清理模式选择"
-            echo "当前源码目录: $SOURCE_DIR"
+            echo "当前源码目录: $CURRENT_SOURCE_DIR"
             echo "-----------------------------------------------------"
             echo "1) 🧹 **标准清理 (make clean)**:"
             echo "   - 建议用于同一目标平台/配置的快速重新编译。"
@@ -642,7 +669,7 @@ validate_build_config() {
     fi
 }
 
-# 4.0 源码管理和拉取 (V4.1 Git Sparse Checkout - 使用 cd)
+# 4.0 源码管理和拉取 (V4.9.9 按类型隔离目录)
 clone_or_update_source() {
     local FW_TYPE="$1"
     local FW_BRANCH="$2"
@@ -656,36 +683,47 @@ clone_or_update_source() {
         *) echo "错误: 固件类型未知 ($FW_TYPE)。" >> "$BUILD_LOG_PATH" && return 1 ;;
     esac
 
+    # --- 核心修改：动态生成当前源码目录 ---
+    local CURRENT_SOURCE_DIR="$SOURCE_ROOT/$FW_TYPE/$FW_BRANCH"
+    echo "--- 源码将被隔离到: $CURRENT_SOURCE_DIR ---"
+    # ----------------------------------------
+    
     echo -e "\n--- 4.0 源码拉取/更新 (模式: **Git Sparse Checkout**) ---"
 
-    if [ -d "$SOURCE_DIR/.git" ]; then
+    if [ -d "$CURRENT_SOURCE_DIR/.git" ]; then
         echo "源码目录已存在，尝试切换/更新分支..."
         
         (
-            cd "$SOURCE_DIR" || exit 1
+            cd "$CURRENT_SOURCE_DIR" || exit 1
             git fetch origin "$FW_BRANCH" --depth 1 || echo "警告: 浅拉取失败，尝试常规拉取..."
             git checkout "$FW_BRANCH" || (echo "错误: 分支切换失败。" >> "$BUILD_LOG_PATH" && exit 1)
             
-            # --- 【V4.9.7 修正】移除有问题的 'git sparse-checkout checkout'
             # 依赖 git pull 来更新已存在的稀疏检出仓库
             git pull origin "$FW_BRANCH" || echo "警告: 稀疏检出/常规 pull 失败，但继续。"
         ) || return 1
 
     else
-        if [ -d "$SOURCE_DIR" ]; then rm -rf "$SOURCE_DIR"; fi
-        mkdir -p "$SOURCE_DIR"
+        # 确保根目录存在
+        mkdir -p "$CURRENT_SOURCE_DIR"
+        
+        # 如果目标目录存在但不是 Git 仓库，先清空它（防止旧目录残留）
+        if [ -d "$CURRENT_SOURCE_DIR" ] && [ ! -d "$CURRENT_SOURCE_DIR/.git" ]; then
+             rm -rf "$CURRENT_SOURCE_DIR"
+             mkdir -p "$CURRENT_SOURCE_DIR"
+        fi
 
-        echo "正在进行稀疏克隆 (Sparse Clone) 到 $SOURCE_DIR..."
+
+        echo "正在进行稀疏克隆 (Sparse Clone) 到 $CURRENT_SOURCE_DIR..."
         
         (
-            cd "$SOURCE_DIR" || exit 1
+            cd "$CURRENT_SOURCE_DIR" || exit 1
 
             git init || (echo "错误: Git 初始化失败。" >> "$BUILD_LOG_PATH" && exit 1)
             git remote add origin "$REPO" || (echo "错误: Git 添加远程仓库失败。" >> "$BUILD_LOG_PATH" && exit 1)
             
             git config core.sparseCheckout true
 
-            # 配置稀疏检出路径，只保留编译必须的目录
+            # 重新插入稀疏检出路径配置
             cat <<EOF > .git/info/sparse-checkout
 /*
 !/docs
@@ -707,14 +745,16 @@ EOF
             git pull origin "$FW_BRANCH" --depth 1 || (echo "错误: Git 稀疏拉取失败，尝试全量克隆..." >> "$BUILD_LOG_PATH" && {
                 # 如果稀疏拉取失败，退回上级目录，删除目录，进行全量克隆
                 cd ..
-                rm -rf "$SOURCE_DIR"
+                rm -rf "$CURRENT_SOURCE_DIR"
                 echo "正在进行全量克隆..."
-                git clone "$REPO" -b "$FW_BRANCH" "$SOURCE_DIR" --depth 1 || (echo "错误: 全量克隆失败。" >> "$BUILD_LOG_PATH" && exit 1)
-                cd "$SOURCE_DIR" || exit 1
+                git clone "$REPO" -b "$FW_BRANCH" "$CURRENT_SOURCE_DIR" --depth 1 || (echo "错误: 全量克隆失败。" >> "$BUILD_LOG_PATH" && exit 1)
+                cd "$CURRENT_SOURCE_DIR" || exit 1
             })
         ) || return 1
     fi
     
+    # 将动态路径导出，供后续函数使用
+    export CURRENT_SOURCE_DIR
     return 0
 }
 
@@ -870,14 +910,18 @@ execute_build() {
     # --- 1. 源码拉取/更新 ---
     echo -e "\n--- 1. 源码拉取/更新 ---"
     
+    # 运行源码拉取，会导出 CURRENT_SOURCE_DIR
     if ! clone_or_update_source "$FW_TYPE" "$FW_BRANCH" "$CONFIG_NAME"; then
         echo "错误: 源码拉取/更新失败，编译中止。" >> "$BUILD_LOG_PATH"
         error_handler 1
         return 1
     fi
     
+    # 获取 CURRENT_SOURCE_DIR 变量
+    local CURRENT_SOURCE_DIR_LOCAL="$CURRENT_SOURCE_DIR"
+
     # 1.5 插入清理步骤
-    if ! clean_source_dir "$SOURCE_DIR"; then
+    if ! clean_source_dir "$CONFIG_NAME"; then
         error_handler 1
         return 1
     fi
@@ -887,7 +931,10 @@ execute_build() {
     
     # 使用子 shell 执行所有编译相关操作
     (
-        if ! cd "$SOURCE_DIR"; then
+        # 在子shell中重新定义 CURRENT_SOURCE_DIR
+        local CURRENT_SOURCE_DIR="$CURRENT_SOURCE_DIR_LOCAL"
+        
+        if ! cd "$CURRENT_SOURCE_DIR"; then
             echo "错误: 无法进入源码目录进行配置/编译。" >> "$BUILD_LOG_PATH"
             exit 1
         fi
@@ -896,7 +943,7 @@ execute_build() {
         local GIT_COMMIT_ID=$(git rev-parse --short HEAD 2>/dev/null || echo "UnknownCommit")
         
         # --- 2. 注入点: Stage 100 (源码拉取后) ---
-        run_custom_injections "${VARS[CUSTOM_INJECTIONS]}" "100"
+        run_custom_injections "${VARS[CUSTOM_INJECTIONS]}" "100" "$CURRENT_SOURCE_DIR"
         
         # --- 3. 配置 QModem feed (如果启用) ---
         if [[ "${VARS[ENABLE_QMODEM]}" == "y" ]]; then
@@ -974,7 +1021,7 @@ execute_build() {
         make defconfig || (echo "错误: make defconfig 失败。" >> "$BUILD_LOG_PATH" && exit 1)
         
         # --- 8. 注入点: Stage 850 (导入 config 后) ---
-        run_custom_injections "${VARS[CUSTOM_INJECTIONS]}" "850"
+        run_custom_injections "${VARS[CUSTOM_INJECTIONS]}" "850" "$CURRENT_SOURCE_DIR"
         
         # --- 8.5 强制清除 NAT 冲突配置 ---
         echo -e "\n--- 8.5 强制清除 NAT 冲突配置 ---"
@@ -999,7 +1046,7 @@ execute_build() {
         else
             echo -e "\n================== 编译成功 ✅ =================="
             # 调用归档函数 (在子 shell 中完成归档工作)
-            archive_firmware_and_logs "$CONFIG_NAME" "$FW_TYPE" "$BUILD_TIME_STAMP_FULL" "$GIT_COMMIT_ID" "$BUILD_LOG_PATH"
+            archive_firmware_and_logs "$CONFIG_NAME" "$FW_TYPE" "$FW_BRANCH" "$BUILD_TIME_STAMP_FULL" "$GIT_COMMIT_ID" "$BUILD_LOG_PATH"
             exit 0
         fi
     ) # 子 Shell 结束
@@ -1085,7 +1132,7 @@ error_handler() {
             while true; do
                 echo -e "\n请选择下一步操作："
                 echo "1) 🔙 返回主菜单 (Return to Main Menu)"
-                echo "2) 🐚 进入 Shell 调试 (Jump to $SOURCE_DIR for debugging)"
+                echo "2) 🐚 进入 Shell 调试 (Jump to $CURRENT_SOURCE_DIR for debugging)"
                 read -p "选择 (1/2): " action
                 
                 case "$action" in
@@ -1094,8 +1141,8 @@ error_handler() {
                         ;;
                     2)
                         echo -e "\n进入 Shell 调试模式。调试完成后，输入 'exit' 返回主菜单。"
-                        if [ -d "$SOURCE_DIR" ]; then
-                            cd "$SOURCE_DIR"
+                        if [ -d "$CURRENT_SOURCE_DIR" ]; then
+                            cd "$CURRENT_SOURCE_DIR"
                         fi
                         /bin/bash
                         return 1
@@ -1115,6 +1162,7 @@ error_handler() {
 run_custom_injections() {
     local all_injections="$1"
     local target_stage_id="$2"
+    local CURRENT_SOURCE_DIR="$3" # 接收动态源码目录
     local executed_count=0
     
     if [[ -z "$all_injections" ]]; then return 0; fi
@@ -1122,8 +1170,7 @@ run_custom_injections() {
     echo -e "\n--- [Stage $target_stage_id] 执行自定义注入脚本 ---"
     
     (
-    # 传递 $SOURCE_DIR (即 $CURRENT_SOURCE_DIR) 变量给子脚本
-    local CURRENT_SOURCE_DIR="$SOURCE_DIR"
+    # 传递 $CURRENT_SOURCE_DIR 变量给子脚本
     
     cd "$EXTRA_SCRIPT_DIR" || exit 1
     
@@ -1133,7 +1180,7 @@ run_custom_injections() {
     IFS=$'\n' read -rd '' -a injections <<< "$injections_array_string"
     
     for injection in "${injections[@]}"; do
-        if [[ -z "$injection" ]]; then continue; fi # <--- 修正点: 确保使用 Bash 语法 fi/break
+        if [[ -z "$injection" ]]; then continue; fi 
         
         local script_command=$(echo "$injection" | awk '{print $1}')
         local stage_id=$(echo "$injection" | awk '{print $2}')
@@ -1158,6 +1205,7 @@ run_custom_injections() {
             local script_args=$(echo "$full_command" | cut -d' ' -f 3-)
             
             echo "Stage $stage_id: 正在执行远程脚本: $script_name $script_args"
+            # 子脚本会在 $EXTRA_SCRIPT_DIR 中运行
             ./"$script_name" $script_args || echo "警告: 远程脚本 $script_name 执行失败。"
         else
             script_name="$command_prefix"
@@ -1185,12 +1233,14 @@ run_custom_injections() {
 archive_firmware_and_logs() {
     local CONFIG_NAME="$1"
     local FW_TYPE="$2"
-    local BUILD_TIME_STAMP="$3"
-    local GIT_COMMIT_ID="$4"
-    local BUILD_LOG_PATH="$5"
-    
+    local FW_BRANCH="$3"
+    local BUILD_TIME_STAMP="$4"
+    local GIT_COMMIT_ID="$5"
+    local BUILD_LOG_PATH="$6"
+
+    local CURRENT_SOURCE_DIR="$SOURCE_ROOT/$FW_TYPE/$FW_BRANCH"
     local TIMESTAMP_COMMIT="${BUILD_TIME_STAMP}_${GIT_COMMIT_ID}"
-    local TARGET_DIR="$SOURCE_DIR/bin/targets"
+    local TARGET_DIR="$CURRENT_SOURCE_DIR/bin/targets" # 使用隔离的源码目录
 
     echo -e "\n--- 10. 固件文件管理与归档 ---"
     
@@ -1215,8 +1265,8 @@ archive_firmware_and_logs() {
             FIRMWARE_COUNT=$((FIRMWARE_COUNT + 1))
             local FILENAME=$(basename "$file")
             
-            # 使用更规范的命名方式：FWTYPE_CONFIGNAME_COMMITID_ORIGINALFILENAME
-            local NEW_FILENAME="${FW_TYPE}_${CONFIG_NAME}_${GIT_COMMIT_ID}_${FILENAME}" 
+            # 使用更规范的命名方式：FWTYPE_BRANCH_CONFIGNAME_COMMITID_ORIGINALFILENAME
+            local NEW_FILENAME="${FW_TYPE}_${FW_BRANCH}_${CONFIG_NAME}_${GIT_COMMIT_ID}_${FILENAME}" 
             
             echo "发现固件: $FILENAME"
 
@@ -1233,7 +1283,7 @@ archive_firmware_and_logs() {
     echo "复制编译日志文件..."
     cp "$BUILD_LOG_PATH" "$TEMP_ARCHIVE_DIR/" || echo "警告: 复制日志文件失败。"
 
-    local ARCHIVE_NAME="${FW_TYPE}_${CONFIG_NAME}_${TIMESTAMP_COMMIT}.zip"
+    local ARCHIVE_NAME="${FW_TYPE}_${FW_BRANCH}_${CONFIG_NAME}_${TIMESTAMP_COMMIT}.zip"
     local FINAL_ARCHIVE_PATH="$OUTPUT_DIR/$ARCHIVE_NAME"
     
     echo "开始创建归档文件: $ARCHIVE_NAME"
