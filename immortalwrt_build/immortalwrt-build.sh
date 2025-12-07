@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ==========================================================
-# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.12 (最终修正版)
-# - V4.9.11: 修正 run_menuconfig_and_save 中 make savedefconfig 返回错误但文件已生成的问题 (已废弃此修正)。
+# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.13 (语法修复版)
 # - V4.9.12: 核心修正：因 make savedefconfig 在特定分支上存在系统缺陷，改为使用 scripts/diffconfig.sh 脚本手动生成差异配置。
+# - V4.9.13: 语法修复：修正了 config_interaction 函数中 case 4 (脚本注入管理) 的 while/done 循环语法错误。
 # ==========================================================
 
 # --- 变量定义 ---
@@ -70,7 +70,7 @@ main_menu() {
     while true; do
         clear
         echo "====================================================="
-        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.12 🔥"
+        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.13 🔥"
         echo "      (源码隔离 | 性能自适应 | 差异配置修复)"
         echo "====================================================="
         echo "1) 🌟 新建机型配置 (Create New Configuration)"
@@ -273,7 +273,7 @@ config_interaction() {
 
                 config_vars[EXTRA_PLUGINS]="$new_plugins_input"
                 ;;
-            4) # 脚本注入管理
+            4) # 脚本注入管理 (修复后的代码块)
                 echo -e "\n--- 🧩 自定义脚本注入列表 ---"
                 echo "请输入注入命令，格式: [脚本路径/URL] [阶段ID (如 100/850)] (一行一个, 输入 'END' 结束输入):"
                 local new_injections=""
@@ -285,12 +285,14 @@ config_interaction() {
                 fi
                 echo "请输入新内容 (或留空表示清空):"
                 
-                # 读取多行输入
-                while IFS= read -r line; do
-                    if [[ "$line" == "END" ]]; then
+                # 读取多行输入并收集到 new_injections 变量
+                local current_line=""
+                while IFS= read -r current_line; do
+                    if [[ "$current_line" == "END" ]]; then
                         break
-                    if [[ -n "$line" ]]; then
-                        new_injections+="$line"$'\n'
+                    fi
+                    if [[ -n "$current_line" ]]; then
+                        new_injections+="$current_line"$'\n'
                     fi
                 done </dev/stdin
 
@@ -363,7 +365,7 @@ run_menuconfig_and_save() {
     if ! clone_or_update_source "$FW_TYPE" "$FW_BRANCH" "$CONFIG_NAME"; then
         echo "错误: 源码拉取/更新失败，无法启动 menuconfig。"
         return 1
-    fi
+    }
     
     # 获取 CURRENT_SOURCE_DIR 变量
     local CURRENT_SOURCE_DIR_LOCAL="$CURRENT_SOURCE_DIR"
@@ -525,7 +527,7 @@ clean_source_dir() {
     if [ ! -d "$CURRENT_SOURCE_DIR" ]; then
         echo "警告: 源码目录不存在，无需清理。"
         return 0
-    fi
+    }
     
     # 使用子 Shell 隔离 cd 操作
     (
@@ -800,7 +802,7 @@ start_build_process() {
         echo "当前没有保存的配置。请先新建配置。"
         read -p "按任意键返回主菜单..."
         return
-    fi
+    }
     
     echo "--- 可用配置 (请选择序号进行编译) ---"
     local i=1
@@ -841,7 +843,7 @@ start_build_process() {
         echo "无效或空的配置选择。返回主菜单。"
         sleep 2
         return
-    fi
+    }
     
     echo -e "\n--- 确认编译列表 ---"
     printf '%s\n' "${configs_to_build[@]}"
@@ -945,7 +947,7 @@ execute_build() {
         echo "错误: 源码拉取/更新失败，编译中止。" >> "$BUILD_LOG_PATH"
         error_handler 1
         return 1
-    fi
+    }
     
     # 获取 CURRENT_SOURCE_DIR 变量
     local CURRENT_SOURCE_DIR_LOCAL="$CURRENT_SOURCE_DIR"
@@ -954,7 +956,7 @@ execute_build() {
     if ! clean_source_dir "$CONFIG_NAME"; then
         error_handler 1
         return 1
-    fi
+    }
     
     # 获取智能线程数
     local JOBS_N=$(determine_compile_jobs)
@@ -999,7 +1001,7 @@ execute_build() {
         IFS=$'\n' read -rd '' -a plugins <<< "$plugins_array_string"
 
         for plugin_cmd in "${plugins[@]}"; do
-            if [[ -z "$plugin_cmd" ]]; then continue; }
+            if [[ -z "$plugin_cmd" ]]; then continue; fi
             
             if [[ "$plugin_cmd" =~ git\ clone\ (.*)\ (.*) ]]; then
                 repo_url="${BASH_REMATCH[1]}"
@@ -1180,7 +1182,7 @@ error_handler() {
                     *)
                         echo "无效选择，请重新输入。"
                         ;;
-                                esac
+                esac
             done
         else
             return 1
@@ -1338,7 +1340,7 @@ archive_firmware_and_logs() {
     else
         echo "❌ 错误: zip 文件创建失败。"
         return 1
-    }
+    fi
 }
 
 # --- 脚本执行入口 ---
