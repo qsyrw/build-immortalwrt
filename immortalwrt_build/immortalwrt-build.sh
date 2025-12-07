@@ -1,10 +1,11 @@
 #!/bin/bash
 
 # ==========================================================
-# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.19 (简单粗暴优化版)
+# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.20 (配置逻辑增强版)
 # - 优化: 源码直接拉取到用户根目录 ($HOME/immortalwrt)，移除复杂层级。
 # - 优化: 采用全量 Git Clone，避免浅克隆带来的文件缺失问题。
 # - 优化: 编译前询问是否删除源码目录以进行全新拉取。
+# - 优化: 强制在配置导入后和编译前执行 make defconfig，确保依赖完整。
 # - 功能: 纯 .config 模式，支持批量编译、插件管理、脚本注入、固件清理。
 # ==========================================================
 
@@ -98,7 +99,7 @@ main_menu() {
     while true; do
         clear
         echo "====================================================="
-        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.19 🔥"
+        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.20 🔥"
         echo "             (纯 .config 配置模式)"
         echo "====================================================="
         echo "1) 🌟 新建机型配置 (Create New Configuration)"
@@ -307,14 +308,12 @@ config_interaction() {
     done
 }
 
-# 3.4 清理源码目录 (适配 V4.9.19 简单粗暴路径)
+# 3.4 清理源码目录
 clean_source_dir() {
     local CONFIG_NAME="$1"
     local CONFIG_FILE="$CONFIGS_DIR/$CONFIG_NAME.conf"
     
     local FW_TYPE=$(grep 'FW_TYPE="' "$CONFIG_FILE" | cut -d'"' -f2)
-    
-    # 动态确定目录名称
     local TARGET_DIR_NAME="$FW_TYPE"
     if [ "$FW_TYPE" == "lede" ]; then TARGET_DIR_NAME="lede"; fi
     
@@ -632,7 +631,7 @@ start_batch_build() {
     read -p "按任意键返回..."
 }
 
-# 4.3 实际执行编译 (V4.9.19)
+# 4.3 实际执行编译 (V4.9.20 修复版)
 execute_build() {
     local CONFIG_NAME="$1"
     local FW_TYPE="$2"
@@ -749,9 +748,13 @@ execute_build() {
         
         if [[ "$CONFIG_FILE_EXTENSION" == "diffconfig" ]]; then
             cp "$source_config_path" "defconfig"
+            # V4.9.20 优化: 导入 diffconfig 后立即运行 make defconfig
+            echo "正在执行 make defconfig 以扩展 diffconfig 配置..."
             make defconfig
         else
             cp "$source_config_path" ".config"
+            # V4.9.20 优化: 导入 config 后立即运行 make defconfig
+            echo "正在执行 make defconfig 以确认配置..."
             make defconfig
         fi
 
@@ -763,7 +766,9 @@ execute_build() {
         sed -i 's/CONFIG_PACKAGE_luci-app-fullconenat=y/# CONFIG_PACKAGE_luci-app-fullconenat is not set/g' .config
 
         echo -e "\n--- 开始编译 (线程: $JOBS_N) ---"
-        make oldconfig
+        # V4.9.20 优化: 使用 make defconfig 替代 oldconfig，确保依赖完全解决
+        echo "再次运行 make defconfig 确保所有依赖正确..."
+        make defconfig
         
         local CCACHE_SETTINGS=""
         if command -v ccache &> /dev/null; then
@@ -880,7 +885,7 @@ manage_injections_menu() {
                 local files=("$EXTRA_SCRIPT_DIR"/*.sh); local i=1; local file_list=()
                 for f in "${files[@]}"; do
                     if [ -f "$f" ]; then echo "$i) $(basename "$f")"; file_list[$i]="$(basename "$f")"; i=$((i+1)); fi
-                done # 修复: 之前缺少 done
+                done
                 
                 read -p "脚本序号: " idx; local sname="${file_list[$idx]}"
                 if [[ -n "$sname" ]]; then
