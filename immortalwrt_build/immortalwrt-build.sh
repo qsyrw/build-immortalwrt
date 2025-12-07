@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # ==========================================================
-# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.14 (稳定修复版)
-# - V4.9.12: 核心修正：因 make savedefconfig 在特定分支上存在系统缺陷，改为使用 scripts/diffconfig.sh 脚本手动生成差异配置。
-# - V4.9.13: 语法修复：修正了 config_interaction 函数中 case 4 (脚本注入管理) 的 while/done 循环语法错误。
-# - V4.9.14: 语法修复：修正了 run_menuconfig_and_save 函数中 clone_or_update_source 调用后的 if/fi 语法错误。
+# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.15 (纯 .config 编译版)
+# - 移除 make menuconfig 流程，旨在解决 "没有规则可制作目标 menuconfig" 的错误。
+# - 用户必须在 $USER_CONFIG_DIR 中提供完整的 .config 或 .diffconfig 文件。
+# - 修复了 clone_or_update_source 中强制全量克隆的逻辑。
 # ==========================================================
 
 # --- 变量定义 ---
@@ -71,12 +71,12 @@ main_menu() {
     while true; do
         clear
         echo "====================================================="
-        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.14 🔥"
-        echo "      (源码隔离 | 性能自适应 | 差异配置修复)"
+        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.15 🔥"
+        echo "             (纯 .config 配置模式)"
         echo "====================================================="
         echo "1) 🌟 新建机型配置 (Create New Configuration)"
         echo "2) ⚙️ 选择/编辑/删除机型配置 (Select/Edit/Delete Configuration)"
-        echo "3) 🚀 批量编译固件 (Start Batch Build Process)"
+        echo "3) 🚀 编译固件 (Start Build Process)"
         echo "4) 🚪 退出 (Exit)"
         echo "-----------------------------------------------------"
         read -p "请选择功能 (1-4): " choice
@@ -94,7 +94,7 @@ main_menu() {
 
 # --- 3. 配置管理 (Create/Edit/Delete) ---
 
-# 3.1 新建配置
+# 3.1 新建配置 (已移除 menuconfig 引导)
 create_config() {
     while true; do
         clear
@@ -115,16 +115,13 @@ create_config() {
         # 1. 基础配置交互
         config_interaction "$new_name" "new"
         
-        # 2. 引导用户进行 menuconfig
+        # 2. 移除 menuconfig 引导
         if [ -f "$CONFIG_FILE" ]; then
             echo ""
-            read -p "配置已保存。是否立即运行 menuconfig 来创建差异配置 (.diffconfig) 文件? (y/n): " run_menu
-            if [[ "$run_menu" == "y" ]]; then
-                # 加载配置中的分支信息
-                local BRANCH=$(grep 'FW_BRANCH="' "$CONFIG_FILE" | cut -d'"' -f2)
-                run_menuconfig_and_save "$new_name" "$BRANCH"
-                read -p "menuconfig 流程结束，按任意键返回..."
-            fi
+            echo "ℹ️ **提醒:** 请手动将您的 **.config** 或 **.diffconfig** 文件放入以下目录:"
+            echo "**$USER_CONFIG_DIR**"
+            echo "文件名应与配置变量中的 **${new_name}.config** 或 **${new_name}.diffconfig** 匹配。"
+            read -p "配置已保存。按任意键返回..."
         fi
         return
     done
@@ -180,7 +177,7 @@ select_config() {
     fi
 }
 
-# 3.3 实际配置交互界面
+# 3.3 实际配置交互界面 (已移除 menuconfig 选项)
 config_interaction() {
     local CONFIG_NAME="$1"
     local MODE="$2"
@@ -203,7 +200,8 @@ config_interaction() {
     # 默认值设置 
     : ${config_vars[FW_TYPE]:="immortalwrt"}
     : ${config_vars[FW_BRANCH]:="master"}
-    : ${config_vars[CONFIG_FILE_NAME]:="$CONFIG_NAME.diffconfig"} # V4.2 默认改为 diffconfig
+    # 默认使用 .config 引导用户
+    : ${config_vars[CONFIG_FILE_NAME]:="$CONFIG_NAME.config"} 
     : ${config_vars[EXTRA_PLUGINS]:=""}
     : ${config_vars[CUSTOM_INJECTIONS]:=""}
     : ${config_vars[ENABLE_QMODEM]:="n"}
@@ -214,11 +212,12 @@ config_interaction() {
         clear
         echo "====================================================="
         echo "     📝 ${MODE^} 配置: ${CONFIG_NAME}"
+        echo "   (请确保在 $USER_CONFIG_DIR 提供了配置好的 .config 文件)"
         echo "====================================================="
         
         # --- 主配置 ---
         echo "1. 固件类型/版本: ${config_vars[FW_TYPE]} / ${config_vars[FW_BRANCH]}"
-        echo "2. 配置差异文件名: ${config_vars[CONFIG_FILE_NAME]}"
+        echo "2. **配置 (config) 文件名**: ${config_vars[CONFIG_FILE_NAME]}"
         local plugin_count=0
         if [[ -n "${config_vars[EXTRA_PLUGINS]}" ]]; then
             plugin_count=$(echo "${config_vars[EXTRA_PLUGINS]}" | grep -o '##' | wc -l | awk '{print $1 + 1}')
@@ -231,8 +230,8 @@ config_interaction() {
         echo "5. [${config_vars[ENABLE_QMODEM]^^}] 内置 Qmodem"
         echo "6. [${config_vars[ENABLE_TURBOACC]^^}] 内置 Turboacc"
         
-        # --- 新增功能项 ---
-        echo -e "\n7. ⚙️ **运行 Menuconfig** (生成/编辑差异配置)"
+        # --- 新增功能项 (已移除 7) ---
+        echo -e "\n7. ⚠️ **检查配置文件的位置和名称**"
 
         echo "-----------------------------------------------------"
         echo "S) 保存配置并返回 | R) 放弃修改并返回"
@@ -256,9 +255,9 @@ config_interaction() {
                 ;;
             2) # 配置差异文件名
                 echo "文件必须存放在 $USER_CONFIG_DIR 目录下。"
-                echo "**注意: 如果文件名不是 .diffconfig 结尾 (例如 x86.config)，脚本将自动将其转换。**"
+                echo "**请确保文件名以 .config 或 .diffconfig 结尾。**"
                 read -p "请输入配置文件名称 (当前: ${config_vars[CONFIG_FILE_NAME]}): " config_file_input
-                config_vars[CONFIG_FILE_NAME]="${config_file_input:-$CONFIG_NAME.diffconfig}"
+                config_vars[CONFIG_FILE_NAME]="${config_file_input:-$CONFIG_NAME.config}"
                 ;;
             3) # 额外插件列表
                 echo -e "\n--- 额外插件地址列表 (请使用 '##' 分隔) ---"
@@ -274,7 +273,7 @@ config_interaction() {
 
                 config_vars[EXTRA_PLUGINS]="$new_plugins_input"
                 ;;
-            4) # 脚本注入管理 (已修复)
+            4) # 脚本注入管理 
                 echo -e "\n--- 🧩 自定义脚本注入列表 ---"
                 echo "请输入注入命令，格式: [脚本路径/URL] [阶段ID (如 100/850)] (一行一个, 输入 'END' 结束输入):"
                 local new_injections=""
@@ -302,24 +301,15 @@ config_interaction() {
                 ;;
             5) config_vars[ENABLE_QMODEM]=$([[ "${config_vars[ENABLE_QMODEM]}" == "y" ]] && echo "n" || echo "y") ;;
             6) config_vars[ENABLE_TURBOACC]=$([[ "${config_vars[ENABLE_TURBOACC]}" == "y" ]] && echo "n" || echo "y") ;;
-            7) # 运行 menuconfig
-                # 临时保存当前配置状态到文件
-                save_config_from_array "$CONFIG_NAME" config_vars
-                echo "配置变量已临时保存。"
-                # 从文件中加载最新分支信息，以防用户在 1 更改了分支
-                local current_branch=$(grep 'FW_BRANCH="' "$CONFIG_FILE" | cut -d'"' -f2)
-                run_menuconfig_and_save "$CONFIG_NAME" "$current_branch"
-                read -p "menuconfig 流程结束，按任意键返回编辑界面..."
-                # 重新加载配置，确保 CONFIG_FILE_NAME 已更新
-                local temp_config_file="$CONFIGS_DIR/$CONFIG_NAME.conf"
-                if [ -f "$temp_config_file" ]; then
-                    # 重新加载文件内容到 config_vars 数组
-                    while IFS='=' read -r key value; do
-                        if [[ "$key" =~ ^[A-Z_]+$ ]]; then
-                            config_vars["$key"]=$(echo "$value" | sed 's/^"//;s/"$//')
-                        fi
-                    done < "$temp_config_file"
+            7) # 检查配置文件的位置和名称
+                local config_path="$USER_CONFIG_DIR/${config_vars[CONFIG_FILE_NAME]}"
+                if [ -f "$config_path" ]; then
+                    echo -e "\n✅ 文件存在: $config_path"
+                    echo "文件类型: $(grep -q "^CONFIG_" "$config_path" && echo ".config/.diffconfig" || echo "未知")"
+                else
+                    echo -e "\n❌ 文件不存在。请手动创建或上传到: $config_path"
                 fi
+                read -p "按任意键返回..."
                 ;;
             S|s)
                 save_config_from_array "$CONFIG_NAME" config_vars
@@ -340,181 +330,6 @@ config_interaction() {
     done
 }
 
-# 3.4 运行 menuconfig 并保存文件 (V4.9.14 修正：if/fi 结构)
-run_menuconfig_and_save() {
-    local CONFIG_NAME="$1"
-    local FW_BRANCH="$2"
-    local CONFIG_FILE="$CONFIGS_DIR/$CONFIG_NAME.conf"
-    
-    # 获取用户指定的配置文件名
-    local USER_CONFIG_FILE_NAME=$(grep 'CONFIG_FILE_NAME="' "$CONFIG_FILE" | cut -d'"' -f2)
-    local SOURCE_CONFIG_PATH="$USER_CONFIG_DIR/$USER_CONFIG_FILE_NAME"
-    
-    # 确定最终要生成的差异文件名
-    local TARGET_DIFF_FILE="$USER_CONFIG_DIR/$USER_CONFIG_FILE_NAME"
-    if [[ "$USER_CONFIG_FILE_NAME" != *.diffconfig ]]; then
-        # 如果用户指定的是 x86.config，我们最终生成的差异文件应该命名为 x86.diffconfig
-        TARGET_DIFF_FILE="${SOURCE_CONFIG_PATH%.*}.diffconfig"
-    fi
-
-    echo -e "\n--- 🔧 启动 Menuconfig 配置工具 ---"
-    
-    # 1. 检查或拉取源码环境
-    local FW_TYPE=$(grep 'FW_TYPE="' "$CONFIG_FILE" | cut -d'"' -f2)
-    
-    # 调用源码拉取函数，它会设置 CURRENT_SOURCE_DIR 环境变量
-    if ! clone_or_update_source "$FW_TYPE" "$FW_BRANCH" "$CONFIG_NAME"; then
-        echo "错误: 源码拉取/更新失败，无法启动 menuconfig。"
-        return 1
-    fi # <--- 修复点：将 '}' 替换为 'fi'
-    
-    # 获取 CURRENT_SOURCE_DIR 变量
-    local CURRENT_SOURCE_DIR_LOCAL="$CURRENT_SOURCE_DIR"
-
-    # 使用子 shell 进入源码目录，并执行 menuconfig
-    # 注意：这里使用 $CURRENT_SOURCE_DIR_LOCAL
-    (
-        local CURRENT_SOURCE_DIR="$CURRENT_SOURCE_DIR_LOCAL"
-        
-        if ! cd "$CURRENT_SOURCE_DIR"; then
-             echo "错误: 无法进入源码目录。"
-             exit 1
-        fi
-        
-        # V4.9.7 修正：强制在任何 make/defconfig/menuconfig 之前运行 feeds update/install
-        echo "--- 正在更新/安装 Feeds 以加载所有 Target/Subtarget 信息 ---"
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
-
-        # 2. 准备配置并运行 menuconfig
-        if [ -f "$SOURCE_CONFIG_PATH" ]; then
-            
-            # --- 配置文件加载逻辑 ---
-            if [[ "$USER_CONFIG_FILE_NAME" != *.diffconfig ]] && [[ "$USER_CONFIG_FILE_NAME" == *.config ]]; then
-                echo -e "\n🚨 自动转换: 检测到文件 [$USER_CONFIG_FILE_NAME] 是一个完整的 .config 文件。"
-                echo "将自动执行 [make defconfig] 修正并启动 menuconfig..."
-                
-                # 复制完整 config 到 .config (Menuconfig 需要 .config)
-                cp "$SOURCE_CONFIG_PATH" ".config"
-
-                # 运行 defconfig 来修正依赖关系
-                make defconfig || (echo "错误: make defconfig 失败。"; exit 1)
-                
-            elif [[ "$USER_CONFIG_FILE_NAME" == *.diffconfig ]]; then
-                echo "检测到差异配置 ($USER_CONFIG_FILE_NAME)，将其复制为 defconfig 并加载。"
-                
-                # 将差异文件复制为 defconfig
-                cp "$SOURCE_CONFIG_PATH" defconfig
-                
-                # 运行 defconfig 来导入差异配置并创建完整的 .config
-                make defconfig || (echo "错误: make defconfig 失败。"; exit 1)
-
-            else
-                echo "警告: 配置文件 [$USER_CONFIG_FILE_NAME] 格式未知，将尝试按差异配置加载。"
-                cp "$SOURCE_CONFIG_PATH" defconfig
-                make defconfig || (echo "错误: make defconfig 失败。"; exit 1)
-            fi
-            echo "现有配置已加载。现在启动 menuconfig..."
-
-        else
-            # --- 首次配置/无配置加载逻辑 (已简化) ---
-            echo "未找到现有配置 ($SOURCE_CONFIG_PATH)，开始初始化默认配置。"
-            
-            # 运行 make defconfig 加载源码默认配置
-            make defconfig || (echo "错误: make defconfig 失败。"; exit 1)
-            
-            echo "已加载源码默认配置。请在 menuconfig 中选择目标平台和机型。"
-        fi
-
-        echo "--- 请在弹出的界面中进行配置，保存并退出 ---"
-        clear
-        make menuconfig
-        
-        local menuconfig_status=$?
-        
-        # 3. 复制生成的配置并保存 (总是生成差异文件)
-        if [ "$menuconfig_status" -eq 0 ]; then
-            if [ -f "$CURRENT_SOURCE_DIR/.config" ]; then
-
-                # 【V4.9.10 修正】运行 make oldconfig 来修复配置依赖
-                echo "正在运行 make oldconfig 修复依赖关系..."
-                # 忽略 make oldconfig 的错误，因为即使失败也可能已部分修复
-                make oldconfig || (echo "警告: make oldconfig 失败，但继续。" >> "$BUILD_LOG_PATH")
-                
-                # --- V4.9.12 核心修正：使用 diffconfig.sh 脚本绕过 make savedefconfig 的缺陷 ---
-                echo "正在使用 scripts/diffconfig.sh 绕过 'make savedefconfig' 目标缺陷..."
-                
-                # 1. 查找当前配置对应的基准 defconfig
-                local TARGET_DEFCONFIG=""
-                # 尝试从 .config 中提取目标平台名称，例如 x86
-                local TARGET_NAME=$(grep '^CONFIG_TARGET_' .config | grep '=y' | head -n 1 | cut -d'_' -f3)
-
-                if [ -n "$TARGET_NAME" ]; then
-                    # 尝试查找 target/linux/<target_name> 下的 defconfig/config.seed
-                    TARGET_DEFCONFIG=$(find target/linux/ -maxdepth 3 -type f -name "*config.seed" -o -name "defconfig" | grep "/$TARGET_NAME/")
-                    
-                    # 优先使用 defconfig，因为它通常是 OpenWrt 官方使用的基准
-                    TARGET_DEFCONFIG=$(echo "$TARGET_DEFCONFIG" | grep "defconfig" | head -n 1)
-                    if [ -z "$TARGET_DEFCONFIG" ]; then
-                         # 如果没有 defconfig，就使用 config.seed
-                         TARGET_DEFCONFIG=$(echo "$TARGET_DEFCONFIG" | head -n 1)
-                    fi
-                fi
-                
-                # 2. 如果找到基准 defconfig，使用它进行差异对比
-                if [ -f "$TARGET_DEFCONFIG" ]; then
-                    echo "找到基准配置: $TARGET_DEFCONFIG"
-                    # 使用 diffconfig.sh 对比 .config 和基准配置，并将结果输出到 defconfig
-                    ./scripts/diffconfig.sh -m "$TARGET_DEFCONFIG" .config > defconfig
-                    local diffconfig_status=$?
-
-                    if [ "$diffconfig_status" -ne 0 ]; then
-                        echo "致命错误: scripts/diffconfig.sh 运行失败。"
-                        exit 1
-                    fi
-                else
-                    echo "警告: 未能自动找到基准配置。将使用 .config 的内容作为差异文件 (不推荐)。"
-                    cp .config defconfig # 作为回退方案
-                fi
-                
-                # --- 绕过 make savedefconfig 的部分结束 ---
-                
-                # 检查 defconfig 是否存在
-                if [ ! -f "$CURRENT_SOURCE_DIR/defconfig" ]; then
-                    echo "致命错误: 无法生成 defconfig 文件，流程中止。"
-                    exit 1
-                fi
-                
-                # 将生成的 defconfig 复制并重命名为目标差异文件
-                cp "$CURRENT_SOURCE_DIR/defconfig" "$TARGET_DIFF_FILE"
-
-                echo -e "\n✅ 差异配置已成功保存到: $TARGET_DIFF_FILE"
-                
-                # 确保配置文件的 CONFIG_FILE_NAME 变量被更新为正确的 .diffconfig 文件名
-                local FINAL_DIFF_FILE_NAME=$(basename "$TARGET_DIFF_FILE")
-                
-                sed -i "s/^CONFIG_FILE_NAME=.*$/CONFIG_FILE_NAME=\"$FINAL_DIFF_FILE_NAME\"/" "$CONFIG_FILE"
-                
-                # 如果用户最初提供的是 x86.config，我们应该删除它，只保留 x86.diffconfig
-                if [ "$SOURCE_CONFIG_PATH" != "$TARGET_DIFF_FILE" ] && [ -f "$SOURCE_CONFIG_PATH" ]; then
-                    rm -f "$SOURCE_CONFIG_PATH"
-                    echo "ℹ️ 已自动删除旧的完整配置: $USER_CONFIG_FILE_NAME"
-                fi
-
-                exit 0
-            else
-                echo -e "\n❌ 错误: menuconfig 运行成功，但未在 $CURRENT_SOURCE_DIR 目录下找到生成的 .config 文件。"
-                exit 1
-            fi
-        else
-            echo -e "\n❌ 错误: make menuconfig 运行失败或用户中止。"
-            exit 1
-        fi
-    ) # 子 Shell 结束
-
-    return $? # 返回子 Shell 的退出状态码
-}
-
 # 3.4 清理源码目录 (使用 cd)
 clean_source_dir() {
     local CONFIG_NAME="$1"
@@ -528,7 +343,7 @@ clean_source_dir() {
     if [ ! -d "$CURRENT_SOURCE_DIR" ]; then
         echo "警告: 源码目录不存在，无需清理。"
         return 0
-    fi # <--- 修复点：将 '}' 替换为 'fi'
+    fi
     
     # 使用子 Shell 隔离 cd 操作
     (
@@ -627,7 +442,7 @@ delete_config() {
     read -p "按任意键返回..."
 }
 
-# 3.8 配置校验和防呆功能 (仅修改了diffconfig检查，以适应新功能)
+# 3.8 配置校验和防呆功能 
 validate_build_config() {
     local -n VARS=$1
     local config_name="$2"
@@ -652,22 +467,10 @@ validate_build_config() {
         local config_path="$USER_CONFIG_DIR/${VARS[CONFIG_FILE_NAME]}"
         if [[ ! -f "$config_path" ]]; then
             echo "❌ 错误：找不到配置/差异配置 (.config 或 .diffconfig) 文件: $config_path"
+            echo "请确保该文件已存在于 $USER_CONFIG_DIR 中。"
             error_count=$((error_count + 1))
         else
-             # 编译时必须使用 .diffconfig，如果用户配置的不是，脚本会尝试先转换
-            if [[ "${VARS[CONFIG_FILE_NAME]}" != *.diffconfig ]]; then
-                echo "⚠️ 警告：配置文件名不是 .diffconfig 结尾，脚本将尝试在编译前自动生成/转换。"
-                local converted_path="${config_path%.*}.diffconfig"
-                if [[ ! -f "$converted_path" ]]; then
-                    echo "🚨 严重警告：找不到自动转换后的差异配置 ($converted_path)。请先运行 Menuconfig 进行转换。"
-                    error_count=$((error_count + 1))
-                else
-                    # 如果转换后的文件存在，则使用它进行后续编译（在 execute_build 中处理）
-                    echo "✅ 差异配置已找到 ($converted_path)，校验通过。"
-                fi
-            else
-                echo "✅ 差异配置 (.diffconfig) 文件存在: $config_path"
-            fi
+            echo "✅ 配置 (.config/.diffconfig) 文件存在: $config_path"
         fi
     fi
     
@@ -702,7 +505,7 @@ validate_build_config() {
     fi
 }
 
-# 4.0 源码管理和拉取 (V4.9.9 按类型隔离目录)
+# 4.0 源码管理和拉取 (强制全量浅克隆 V4.9.15)
 clone_or_update_source() {
     local FW_TYPE="$1"
     local FW_BRANCH="$2"
@@ -721,7 +524,7 @@ clone_or_update_source() {
     echo "--- 源码将被隔离到: $CURRENT_SOURCE_DIR ---"
     # ----------------------------------------
     
-    echo -e "\n--- 4.0 源码拉取/更新 (模式: **Git Sparse Checkout**) ---"
+    echo -e "\n--- 4.0 源码拉取/更新 (模式: **全量浅克隆**) ---"
 
     if [ -d "$CURRENT_SOURCE_DIR/.git" ]; then
         echo "源码目录已存在，尝试切换/更新分支..."
@@ -731,60 +534,35 @@ clone_or_update_source() {
             git fetch origin "$FW_BRANCH" --depth 1 || echo "警告: 浅拉取失败，尝试常规拉取..."
             git checkout "$FW_BRANCH" || (echo "错误: 分支切换失败。" >> "$BUILD_LOG_PATH" && exit 1)
             
-            # 依赖 git pull 来更新已存在的稀疏检出仓库
-            git pull origin "$FW_BRANCH" || echo "警告: 稀疏检出/常规 pull 失败，但继续。"
+            # 使用 git pull 来更新
+            git pull origin "$FW_BRANCH" || echo "警告: Git pull 失败，但继续。"
         ) || return 1
 
     else
-        # 确保根目录存在
-        mkdir -p "$CURRENT_SOURCE_DIR"
+        # 确保父目录存在
+        mkdir -p "$SOURCE_ROOT/$FW_TYPE"
         
         # 如果目标目录存在但不是 Git 仓库，先清空它（防止旧目录残留）
-        if [ -d "$CURRENT_SOURCE_DIR" ] && [ ! -d "$CURRENT_SOURCE_DIR/.git" ]; then
+        if [ -d "$CURRENT_SOURCE_DIR" ]; then
              rm -rf "$CURRENT_SOURCE_DIR"
-             mkdir -p "$CURRENT_SOURCE_DIR"
         fi
 
-
-        echo "正在进行稀疏克隆 (Sparse Clone) 到 $CURRENT_SOURCE_DIR..."
+        echo "正在进行 **全量浅克隆 (git clone --depth 1)** 到 $CURRENT_SOURCE_DIR..."
         
-        (
-            cd "$CURRENT_SOURCE_DIR" || exit 1
-
-            git init || (echo "错误: Git 初始化失败。" >> "$BUILD_LOG_PATH" && exit 1)
-            git remote add origin "$REPO" || (echo "错误: Git 添加远程仓库失败。" >> "$BUILD_LOG_PATH" && exit 1)
-            
-            git config core.sparseCheckout true
-
-            # 重新插入稀疏检出路径配置
-            cat <<EOF > .git/info/sparse-checkout
-/*
-!/docs
-!/feeds
-!/tools
-!/toolchain
-/include/*
-/package/*
-/target/*
-/toolchain/*
-/tools/*
-/scripts/*
-/LICENSE
-/README*
-/Config.in
-EOF
-            
-            # 首次拉取
-            git pull origin "$FW_BRANCH" --depth 1 || (echo "错误: Git 稀疏拉取失败，尝试全量克隆..." >> "$BUILD_LOG_PATH" && {
-                # 如果稀疏拉取失败，退回上级目录，删除目录，进行全量克隆
-                cd ..
-                rm -rf "$CURRENT_SOURCE_DIR"
-                echo "正在进行全量克隆..."
-                git clone "$REPO" -b "$FW_BRANCH" "$CURRENT_SOURCE_DIR" --depth 1 || (echo "错误: 全量克隆失败。" >> "$BUILD_LOG_PATH" && exit 1)
-                cd "$CURRENT_SOURCE_DIR" || exit 1
-            })
-        ) || return 1
+        # **关键修复：强制使用全量浅克隆来确保文件完整性**
+        git clone "$REPO" -b "$FW_BRANCH" "$CURRENT_SOURCE_DIR" --depth 1 || (echo "错误: Git 克隆失败。" >> "$BUILD_LOG_PATH" && return 1)
     fi
+    
+    # --- 增加验证步骤 ---
+    if [ ! -f "$CURRENT_SOURCE_DIR/Makefile" ]; then
+        echo "🚨 严重错误: 在源码目录 ($CURRENT_SOURCE_DIR) 中未找到核心 Makefile。"
+        return 1
+    fi
+    if [ ! -d "$CURRENT_SOURCE_DIR/scripts" ]; then
+        echo "🚨 严重错误: 源码目录 ($CURRENT_SOURCE_DIR) 中缺少 scripts 目录。"
+        return 1
+    fi
+    echo "✅ 源码拉取/更新完成，核心文件校验通过。"
     
     # 将动态路径导出，供后续函数使用
     export CURRENT_SOURCE_DIR
@@ -793,17 +571,17 @@ EOF
 
 # --- 4. 编译流程 (Build) ---
 
-# 4.1 固件编译流程
+# 4.1 编译入口
 start_build_process() {
     clear
-    echo "## 🚀 批量编译固件"
+    echo "## 🚀 编译固件"
     
     local configs=("$CONFIGS_DIR"/*.conf)
     if [ ${#configs[@]} -eq 0 ] || ([ ${#configs[@]} -eq 1 ] && [ ! -f "${configs[0]}" ]); then
         echo "当前没有保存的配置。请先新建配置。"
         read -p "按任意键返回主菜单..."
         return
-    fi # <--- 修复点：将 '}' 替换为 'fi'
+    fi 
     
     echo "--- 可用配置 ---"
     local i=1
@@ -820,21 +598,30 @@ start_build_process() {
     local return_index=$i
     echo "$return_index) 返回主菜单"
     
-    read -p "请选择配置序号 (1-$return_index): " choice
+    read -p "请选择要编译的配置序号 (1-$return_index): " choice
     if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "$return_index" ]; then
         if [ "$choice" -eq "$return_index" ]; then
             return
         else
             local SELECTED_NAME="${files[$choice]}"
-            echo ""
-            echo "当前选择: **$SELECTED_NAME**"
-            read -p "选择操作：1) 编辑配置 | 2) 删除配置 | 3) 返回主菜单: " action
-            case "$action" in
-                1) config_interaction "$SELECTED_NAME" "edit" ;;
-                2) delete_config "$SELECTED_NAME" ;;
-                3) return ;;
-                *) echo "无效操作。返回主菜单。"; sleep 1 ;;
-            esac
+            
+            declare -A SELECTED_VARS
+            local CONFIG_FILE="$CONFIGS_DIR/$SELECTED_NAME.conf"
+            
+            while IFS='=' read -r key value; do
+                if [[ "$key" =~ ^[A-Z_]+$ ]]; then
+                    SELECTED_VARS["$key"]=$(echo "$value" | sed 's/^"//;s/"$//')
+                fi
+            done < "$CONFIG_FILE"
+            
+            # 传递数组引用
+            if validate_build_config SELECTED_VARS "$SELECTED_NAME"; then
+                 read -p "配置校验通过，按任意键开始编译..."
+                 execute_build "$SELECTED_NAME" "${SELECTED_VARS[FW_TYPE]}" "${SELECTED_VARS[FW_BRANCH]}" SELECTED_VARS
+            else
+                 echo "配置校验失败，请修改后重试。"
+                 read -p "按任意键返回..."
+            fi
         fi
     else
         echo "无效选择。返回主菜单。"
@@ -842,70 +629,6 @@ start_build_process() {
     fi
 }
 
-# 4.2 批量编译流程
-batch_build_process() {
-    local -n CONFIGS_TO_BUILD=$1
-    local total_count=${#CONFIGS_TO_BUILD[@]}
-    local success_count=0
-    local failure_count=0
-
-    echo -e "\n--- 批量编译配置 (${total_count} 个) ---"
-
-    local failure_strategy="continue"
-    echo -e "\n当其中一个配置编译失败时，脚本应如何处理？"
-    echo "1) 🛑 立即停止批处理 (Stop)"
-    echo "2) ➡️ 跳过当前失败配置，继续编译下一个 (Continue)"
-    read -p "请选择 (1/2, 默认继续): " strategy_choice
-    [[ "$strategy_choice" == "1" ]] && failure_strategy="stop"
-
-    for i in "${!CONFIGS_TO_BUILD[@]}"; do
-        local CONFIG_NAME="${CONFIGS_TO_BUILD[$i]}"
-        local CONFIG_FILE="$CONFIGS_DIR/$CONFIG_NAME.conf"
-
-        echo -e "\n====================================================="
-        echo "🚀 [$(($i+1))/${total_count}] 正在处理配置: $CONFIG_NAME"
-        echo "====================================================="
-        
-        declare -A BATCH_VARS
-        
-        while IFS='=' read -r key value; do
-            if [[ "$key" =~ ^[A-Z_]+$ ]]; then
-                BATCH_VARS["$key"]=$(echo "$value" | sed 's/^"//;s/"$//')
-            fi
-        done < "$CONFIG_FILE"
-        
-        # 使用数组引用进行校验
-        if ! validate_build_config BATCH_VARS "$CONFIG_NAME"; then
-            echo "🚨 配置 [$CONFIG_NAME] 验失败，跳过编译。"
-            failure_count=$((failure_count + 1))
-            [[ "$failure_strategy" == "stop" ]] && break
-            continue
-        fi
-
-        # 传递数组引用
-        if execute_build "$CONFIG_NAME" "${BATCH_VARS[FW_TYPE]}" "${BATCH_VARS[FW_BRANCH]}" BATCH_VARS; then
-            success_count=$((success_count + 1))
-        else
-            failure_count=$((failure_count + 1))
-            echo "🚨 配置 [$CONFIG_NAME] 编译失败。"
-            [[ "$failure_strategy" == "stop" ]] && { 
-                echo "🛑 批处理已根据用户设置停止。"
-                break 
-            }
-        fi
-        
-        unset BATCH_VARS
-    done
-
-    echo -e "\n====================================================="
-    echo "         批量编译完成报告"
-    echo "-----------------------------------------------------"
-    echo "总配置数: $total_count"
-    echo "✅ 成功数: $success_count"
-    echo "❌ 失败数: $failure_count"
-    echo "====================================================="
-    read -p "按任意键返回主菜单..."
-}
 
 # 4.3 实际执行编译的函数
 execute_build() {
@@ -929,7 +652,7 @@ execute_build() {
         echo "错误: 源码拉取/更新失败，编译中止。" >> "$BUILD_LOG_PATH"
         error_handler 1
         return 1
-    fi # <--- 修复点：将 '}' 替换为 'fi'
+    fi
     
     # 获取 CURRENT_SOURCE_DIR 变量
     local CURRENT_SOURCE_DIR_LOCAL="$CURRENT_SOURCE_DIR"
@@ -938,7 +661,7 @@ execute_build() {
     if ! clean_source_dir "$CONFIG_NAME"; then
         error_handler 1
         return 1
-    fi # <--- 修复点：将 '}' 替换为 'fi'
+    fi
     
     # 获取智能线程数
     local JOBS_N=$(determine_compile_jobs)
@@ -1012,27 +735,31 @@ execute_build() {
             (bash "$turboacc_script") || (echo "错误: Turboacc 配置失败。" >> "$BUILD_LOG_PATH" && exit 1)
         fi
 
-        # --- 7. 导入差异配置重建 .config ---
+        # --- 7. 导入用户配置重建 .config ---
         local config_file_name="${VARS[CONFIG_FILE_NAME]}"
         local source_config_path="$USER_CONFIG_DIR/$config_file_name"
-        local target_diffconfig_path="$USER_CONFIG_DIR/$config_file_name"
-
-        if [[ "$config_file_name" != *.diffconfig ]]; then
-            # 如果文件名不是 .diffconfig，使用 Menuconfig 流程中生成的转换结果。
-            target_diffconfig_path="${source_config_path%.*}.diffconfig"
-            
-            if [ ! -f "$target_diffconfig_path" ]; then
-                echo "❌ 错误: 配置文件 ($config_file_name) 不是差异配置，且未找到已转换的差异配置 ($target_diffconfig_path)。"
-                echo "请先运行 Menuconfig (选项 7) 进行自动转换。" >> "$BUILD_LOG_PATH"
-                exit 1
-            fi
+        
+        echo -e "\n--- 7. 导入用户配置 ($(basename "$source_config_path")) 重建 .config ---"
+        
+        local CONFIG_FILE_EXTENSION="${config_file_name##*.}"
+        
+        if [[ "$CONFIG_FILE_EXTENSION" == "config" ]]; then
+            # 导入完整的 .config
+            echo "导入类型: 完整的 .config 文件。将复制到 .config 并运行 make defconfig 修复依赖。"
+            cp "$source_config_path" ".config"
+            make defconfig || (echo "错误: make defconfig 失败。" >> "$BUILD_LOG_PATH" && exit 1)
+        elif [[ "$CONFIG_FILE_EXTENSION" == "diffconfig" ]]; then
+            # 导入差异配置 .diffconfig
+            echo "导入类型: .diffconfig 文件。将复制到 defconfig 并运行 make defconfig。"
+            cp "$source_config_path" "defconfig"
+            make defconfig || (echo "错误: make defconfig 失败。" >> "$BUILD_LOG_PATH" && exit 1)
+        else
+            # 默认视为 .config 导入
+            echo "警告: 配置文件后缀未知，默认视为 .config 处理。"
+            cp "$source_config_path" ".config"
+            make defconfig || (echo "错误: make defconfig 失败。" >> "$BUILD_LOG_PATH" && exit 1)
         fi
-        
-        echo -e "\n--- 7. 导入差异配置 ($(basename "$target_diffconfig_path")) 重建 .config ---"
-        
-        cp "$target_diffconfig_path" "defconfig"
-        
-        make defconfig || (echo "错误: make defconfig 失败。" >> "$BUILD_LOG_PATH" && exit 1)
+
         
         # --- 8. 注入点: Stage 850 (导入 config 后) ---
         run_custom_injections "${VARS[CUSTOM_INJECTIONS]}" "850" "$CURRENT_SOURCE_DIR"
@@ -1047,9 +774,12 @@ execute_build() {
 
         # --- 9. 配置/编译 ---
         echo -e "\n--- 9. 开始编译 (线程数: $JOBS_N) ---"
-        make defconfig # 再次运行确保所有清理/注入后的依赖关系正确更新
         
         # 核心编译命令，输出到日志文件
+        # V4.9.15 确保在编译前运行 make oldconfig 来修复配置依赖
+        echo "正在运行 make oldconfig 修复依赖关系..."
+        make oldconfig || (echo "警告: make oldconfig 失败，但继续。" >> "$BUILD_LOG_PATH")
+        
         make -j"$JOBS_N" V=s 2>&1 | tee "$BUILD_LOG_PATH"
         
         local BUILD_STATUS=${PIPESTATUS[0]}
@@ -1073,9 +803,9 @@ execute_build() {
     return 0
 }
 
-# --- 5. 工具和辅助函数 ---
+# --- 5. 工具和辅助函数 (省略未修改的辅助函数) ---
 
-## 🧠 5.1 智能确定编译线程数 (`make -jN`)
+# 5.1 智能确定编译线程数
 determine_compile_jobs() {
     echo -e "\n--- 🧠 性能检测与线程数自适应 ---"
     
@@ -1194,12 +924,12 @@ run_custom_injections() {
     IFS=$'\n' read -rd '' -a injections <<< "$injections_array_string"
     
     for injection in "${injections[@]}"; do
-        if [[ -z "$injection" ]]; then continue; fi # <--- 修复点：将 '}' 替换为 'fi'
+        if [[ -z "$injection" ]]; then continue; fi
         
         local script_command=$(echo "$injection" | awk '{print $1}')
         local stage_id=$(echo "$injection" | awk '{print $2}')
         
-        if [[ "$stage_id" != "$target_stage_id" ]]; then continue; fi # <--- 修复点：将 '}' 替换为 'fi'
+        if [[ "$stage_id" != "$target_stage_id" ]]; then continue; fi
         
         executed_count=$((executed_count + 1))
         local script_name
@@ -1324,6 +1054,7 @@ archive_firmware_and_logs() {
         return 1
     fi
 }
+
 
 # --- 脚本执行入口 ---
 
