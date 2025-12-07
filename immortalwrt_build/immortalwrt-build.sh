@@ -68,13 +68,13 @@ main_menu() {
     while true; do
         clear
         echo "====================================================="
-        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.6 🔥"
+        echo "        🔥 ImmortalWrt ▪ 固件编译管理脚本 V4.9.6 🔥"
         echo "      (自动转换 | 性能自适应 | 稀疏检出)"
         echo "====================================================="
-        echo "1) 🌟 新建机型配置 (Create New Configuration)"
-        echo "2) ⚙️ 选择/编辑/删除机型配置 (Select/Edit/Delete Configuration)"
-        echo "3) 🚀 批量编译固件 (Start Batch Build Process)"
-        echo "4) 🚪 退出 (Exit)"
+        echo "1) 🌟 ▪ 新建机型配置 (Create New Configuration)"
+        echo "2) ⚙️ ▪ 选择/编辑/删除机型配置 (Select/Edit/Delete Configuration)"
+        echo "3) 🚀 ▪ 批量编译固件 (Start Batch Build Process)"
+        echo "4) 🚪 ▪ 退出 (Exit)"
         echo "-----------------------------------------------------"
         read -p "请选择功能 (1-4): " choice
         
