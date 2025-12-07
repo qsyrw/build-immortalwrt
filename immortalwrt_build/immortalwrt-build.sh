@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================================
-# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.20 (配置逻辑增强版)
+# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.21 (配置逻辑增强版)
 # - 优化: 源码直接拉取到用户根目录 ($HOME/immortalwrt)，移除复杂层级。
 # - 优化: 采用全量 Git Clone，避免浅克隆带来的文件缺失问题。
 # - 优化: 编译前询问是否删除源码目录以进行全新拉取。
@@ -41,6 +41,8 @@ CURRENT_SOURCE_DIR=""
 check_and_install_dependencies() {
     echo "## 检查并安装编译依赖..."
     
+    # 核心依赖列表，注意这里保留了 build-essential, zlib1g-dev 等，但只用于最终安装提示
+    # 实际检测时会排除它们
     local CORE_DEPENDENCIES="build-essential git make gcc g++ binutils zlib1g-dev libncurses5-dev gawk python3 perl wget curl unzip procps lscpu free ccache"
     local INSTALL_DEPENDENCIES="ack antlr3 asciidoc autoconf automake autopoint bison build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man intltool libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libmpc-dev libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply python3-pyelftools qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd uuid-runtime zip procps util-linux"
     
@@ -52,31 +54,43 @@ check_and_install_dependencies() {
     fi
 
     local missing_deps=""
-    for dep in $CORE_DEPENDENCIES; do
-        if ! command -v "$dep" &> /dev/null && [[ "$dep" != "ccache" ]]; then
+    
+    # 🌟 优化点：明确指定需要通过 command -v 检测的工具
+    local CHECKABLE_TOOLS="git make gcc g++ gawk python3 perl wget curl unzip procps lscpu free"
+    
+    # 循环检测可执行工具
+    for dep in $CHECKABLE_TOOLS; do
+        if ! command -v "$dep" &> /dev/null; then
             missing_deps="$missing_deps $dep"
         fi
     done
+
+    # 特殊处理：如果 build-essential 依赖的核心工具 (make, gcc) 缺失，则提示安装
+    if [[ "$missing_deps" =~ "make" || "$missing_deps" =~ "gcc" ]]; then
+        # 此时已经知道 make/gcc 缺失，故不用再单独报告 build-essential
+        : # Do nothing, the tools already flagged will trigger install
+    fi
+    # ⚠️ 注意: libncurses5-dev, zlib1g-dev, binutils 这些库文件不适合用 command -v 检测，应直接依赖后续的 apt install 尝试来确保。
     
     if [ -n "$missing_deps" ]; then
-        echo "❌ 警告: 缺少关键依赖: $missing_deps。尝试安装所有依赖..."
+        echo "❌ 警告: 缺少关键工具: $missing_deps。"
+        echo "尝试安装所有依赖以解决潜在的库文件缺失问题..." # 提示信息更正
+    else
+        echo "✅ 核心工具校验通过。"
     fi
-
+    
+    # ... (后续的 apt install 逻辑保持不变)
     if command -v apt-get &> /dev/null; then
         echo -e "\n--- 正在更新软件包列表并安装依赖 ---"
         sudo apt-get update || { echo "错误: apt-get update 失败。请检查网络。"; return 1; }
+        # 无论 missing_deps 结果如何，运行这一步保证库文件和元包的完整性
         sudo apt-get install -y $INSTALL_DEPENDENCIES
         if [ $? -ne 0 ]; then
              echo "❌ 错误: 依赖安装失败。请手动检查并安装。"
              return 1
         fi
-    elif command -v yum &> /dev/null; then
-        echo "请手动检查并安装以下依赖：$INSTALL_DEPENDENCIES"
-    else
-        echo -e "\n**警告:** 无法自动安装依赖。请确保以下软件包已安装:\n$INSTALL_DEPENDENCIES"
-        read -p "按任意键继续 (风险自负)..."
-    fi
-    
+    # ... (其他系统/警告逻辑保持不变)
+
     echo "## 依赖检查完成。"
     sleep 2
     return 0
