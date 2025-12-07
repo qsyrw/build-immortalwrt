@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ==========================================================
-# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.5 (最终语法修复版)
+# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.6 (最终语法修复版)
 # - 修复：config_interaction 函数中 case 4) 模块的 Bash 语法错误 (endif -> fi)。
-# - 修复：run_custom_injections 函数中 for 循环的 Bash 语法错误 (endif -> ;)。
+# - 修复：run_custom_injections 函数中 for 循环的 Bash 语法错误 (endif -> fi)。
 # - 优化：移除硬编码的 AUTORUN_A/B 功能，完全依赖 Custom Injections。
 # ==========================================================
 
@@ -68,7 +68,7 @@ main_menu() {
     while true; do
         clear
         echo "====================================================="
-        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.5 🔥"
+        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.6 🔥"
         echo "      (自动转换 | 性能自适应 | 稀疏检出)"
         echo "====================================================="
         echo "1) 🌟 新建机型配置 (Create New Configuration)"
@@ -287,7 +287,7 @@ config_interaction() {
                 while IFS= read -r line; do
                     if [[ "$line" == "END" ]]; then
                         break
-                    fi # <--- 修正点
+                    fi
                     if [[ -n "$line" ]]; then
                         new_injections+="$line"$'\n'
                     fi
@@ -881,7 +881,7 @@ batch_build_process() {
         
         # 使用数组引用进行校验
         if ! validate_build_config BATCH_VARS "$CONFIG_NAME"; then
-            echo "🚨 配置 [$CONFIG_NAME] 校验失败，跳过编译。"
+            echo "🚨 配置 [$CONFIG_NAME] 验失败，跳过编译。"
             failure_count=$((failure_count + 1))
             [[ "$failure_strategy" == "stop" ]] && break
             continue
@@ -981,7 +981,7 @@ execute_build() {
         IFS=$'\n' read -rd '' -a plugins <<< "$plugins_array_string"
 
         for plugin_cmd in "${plugins[@]}"; do
-            if [[ -z "$plugin_cmd" ]]; then continue; end
+            if [[ -z "$plugin_cmd" ]]; then continue; fi
             
             if [[ "$plugin_cmd" =~ git\ clone\ (.*)\ (.*) ]]; then
                 repo_url="${BASH_REMATCH[1]}"
@@ -1192,7 +1192,7 @@ run_custom_injections() {
     IFS=$'\n' read -rd '' -a injections <<< "$injections_array_string"
     
     for injection in "${injections[@]}"; do
-        if [[ -z "$injection" ]]; then continue; fi # <--- 修正点: 移除 'endif'
+        if [[ -z "$injection" ]]; then continue; fi # <--- 修正点: 确保使用 Bash 语法 fi/break
         
         local script_command=$(echo "$injection" | awk '{print $1}')
         local stage_id=$(echo "$injection" | awk '{print $2}')
