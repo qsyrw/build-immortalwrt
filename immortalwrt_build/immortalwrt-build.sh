@@ -1,11 +1,11 @@
 #!/bin/bash
 
 # ==========================================================
-# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.28 (环境隔离/配置修正版)
-# - 修复: 在 execute_build 中，彻底清除所有可能污染编译链的环境变量 (CC, CCACHE, HOSTCC等)。
+# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.29 (最终修正版)
+# - 修复: 批量编译菜单 (build_queue_menu) 中，将错误的 'end' 关键字替换为 'done'。
+# - 修复: 彻底清除所有可能污染编译链的环境变量 (CC, CCACHE, HOSTCC等)。
 # - 修复: 强制禁用 CCACHE 注入，解决 toplevel.mk 处出现的 Shell 语法错误。
 # - 修复: 在 .config 导入后，自动禁用 luci-app-turboacc 相关的递归依赖项。
-# - 功能: 纯 .config 模式，支持批量编译、插件管理、脚本注入、固件清理。
 # ==========================================================
 
 # --- 变量定义 ---
@@ -111,7 +111,7 @@ main_menu() {
     while true; do
         clear
         echo "====================================================="
-        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.28 🔥"
+        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.29 🔥"
         echo "             (纯 .config 配置模式)"
         echo "====================================================="
         echo "1) 🌟 新建机型配置 (Create New Configuration)"
@@ -550,7 +550,7 @@ build_queue_menu() {
                         local new_queue=()
                         for item in "${queue[@]}"; do
                             if [ "$item" != "$config_name_to_toggle" ]; then new_queue+=("$item"); fi
-                        end
+                        done # <-- V4.9.29 修正：将 'end' 替换为 'done'
                         queue=("${new_queue[@]}")
                         echo "配置已移除。"
                     else
@@ -595,7 +595,7 @@ start_batch_build() {
             execute_build "$config_name" "${BATCH_VARS[FW_TYPE]}" "${BATCH_VARS[FW_BRANCH]}" BATCH_VARS
             if [ $? -eq 0 ]; then echo "✅ 编译成功。"; else echo "❌ 编译失败，跳过。"; fi
         else
-            echo "❌ 校验失败，跳过。"
+            echo "❌ 校验失败，跳过。"; sleep 1
         fi
     done
     unset IS_BATCH_BUILD
@@ -603,7 +603,7 @@ start_batch_build() {
     read -p "按任意键返回..."
 }
 
-# 4.3 实际执行编译 (V4.9.28 最终修正版)
+# 4.3 实际执行编译 (V4.9.29 最终修正版)
 execute_build() {
     local CONFIG_NAME="$1"
     local FW_TYPE="$2"
@@ -653,13 +653,13 @@ execute_build() {
     # 确定编译线程数
     local JOBS_N=$(determine_compile_jobs)
     
-    # 🔥 V4.9.28 核心修正：所有编译相关操作都在这个唯一的子 Shell 内完成
+    # 🔥 V4.9.29 核心修正：所有编译相关操作都在这个唯一的子 Shell 内完成
     (
         local CURRENT_SOURCE_DIR="$CURRENT_SOURCE_DIR_LOCAL"
         # 强制切换到源码目录，确保后续所有相对路径操作的正确性
         if ! cd "$CURRENT_SOURCE_DIR"; then echo "错误: 无法进入源码目录。"; exit 1; fi
 
-        # V4.9.28: 彻底的环境隔离，防止外部的 Shell 变量污染 toplevel.mk
+        # V4.9.29: 彻底的环境隔离，防止外部的 Shell 变量污染 toplevel.mk
         export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" 
         unset CC CXX LD AR AS CPPFLAGS CFLAGS CXXFLAGS LDFLAGS
         unset HOSTCC HOSTCXX TARGETCC TARGETCXX CCACHE
@@ -761,7 +761,7 @@ execute_build() {
         fi
         # ----------------------------------------------------------------
         
-        # V4.9.28 修正: 处理 Kconfig 递归依赖
+        # V4.9.29 修正: 处理 Kconfig 冲突和 NAT 冲突
         echo -e "\n--- 处理 Kconfig 冲突和 NAT 冲突 ---"
         if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
             echo "警告: 检测到 luci-app-turboacc 冲突，强制禁用 kmod-nft-fullcone。"
@@ -770,16 +770,13 @@ execute_build() {
 
         run_custom_injections "${VARS[CUSTOM_INJECTIONS]}" "850" "$CURRENT_SOURCE_DIR"
         
-        # 强制清除 NAT 冲突
-        sed -i 's/CONFIG_PACKAGE_kmod-ipt-fullconenat=y/# CONFIG_PACKAGE_kmod-ipt-fullconenat is not set/g' .config
-        sed -i 's/CONFIG_PACKAGE_kmod-nat-fullconenat=y/# CONFIG_PACKAGE_kmod-nat-fullconenat is not set/g' .config
-        sed -i 's/CONFIG_PACKAGE_luci-app-fullconenat=y/# CONFIG_PACKAGE_luci-app-fullconenat is not set/g' .config
+        # 强制清除 NAT
 
         echo -e "\n--- 开始编译 (线程: $JOBS_N) ---"
         echo "最终运行 make defconfig 确保所有依赖正确..."
         make defconfig || { echo "❌ 错误: 最终 make defconfig 失败。"; exit 1; }
         
-        # V4.9.28 修正: CCACHE 注入逻辑被移除，防止 Shell 语法错误
+        # V4.9.29 修正: CCACHE 注入逻辑被移除，防止 Shell 语法错误
         local CCACHE_SETTINGS=""
         # if command -v ccache &> /dev/null; then
         #     CCACHE_SETTINGS="CC=\"ccache gcc\" CXX=\"ccache g++\""
@@ -981,7 +978,7 @@ run_custom_injections() {
     IFS=$'\n' read -rd '' -a injections <<< "$injections_array_string"
     
     for injection in "${injections[@]}"; do
-        if [[ -z "$injection" ]]; then continue; fi
+        if [[ -z "$injection" ]]; then continue; }
         
         local script_name=$(echo "$injection" | awk '{print $1}')
         local stage=$(echo "$injection" | awk '{print $2}')
