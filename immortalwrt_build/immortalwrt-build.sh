@@ -1,11 +1,10 @@
 #!/bin/bash
 
 # ==========================================================
-# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.23 (全面修正版)
-# - 修复: check_and_install_dependencies 函数中 if/fi 结构缺失导致的语法错误 (行 97)。
-# - 修复: execute_build 函数中额外插件循环的 Bash 语法错误 (行 877 附近)。
-# - 优化: 改进依赖检测逻辑，排除元软件包，避免假阴性报告。
-# - 优化: 强制在配置导入后和编译前执行 make defconfig，确保依赖完整。
+# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.24 (配置导入修复版)
+# - 修复: 彻底重写 execute_build 中配置文件导入逻辑，增加错误检查。
+# - 修复: 解决 make defconfig 找不到 .config 的根本问题。
+# - 修复: 解决 V4.9.23 中所有已知 Bash 语法错误 (if/fi, 插件循环)。
 # - 功能: 纯 .config 模式，支持批量编译、插件管理、脚本注入、固件清理。
 # ==========================================================
 
@@ -89,7 +88,7 @@ check_and_install_dependencies() {
     else
         echo -e "\n**警告:** 无法自动安装依赖。请确保以下软件包已安装:\n$INSTALL_DEPENDENCIES"
         read -p "按任意键继续 (风险自负)..."
-    fi # <--- 修正点: 闭合 if 语句
+    fi 
 
     echo "## 依赖检查完成。"
     sleep 2
@@ -113,7 +112,7 @@ main_menu() {
     while true; do
         clear
         echo "====================================================="
-        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.23 🔥"
+        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.24 🔥"
         echo "             (纯 .config 配置模式)"
         echo "====================================================="
         echo "1) 🌟 新建机型配置 (Create New Configuration)"
@@ -336,7 +335,7 @@ clean_source_dir() {
     if [ ! -d "$CURRENT_SOURCE_DIR" ]; then
         echo "警告: 源码目录不存在，无需清理。"
         return 0
-    fi # <--- 修正点：缺少闭合 'if' 的 'fi'
+    fi
     
     (
         cd "$CURRENT_SOURCE_DIR" || { echo "错误: 无法进入源码目录进行清理。"; return 1; }
@@ -645,7 +644,7 @@ start_batch_build() {
     read -p "按任意键返回..."
 }
 
-# 4.3 实际执行编译 (V4.9.23 修正版)
+# 4.3 实际执行编译 (V4.9.24 修复版)
 execute_build() {
     local CONFIG_NAME="$1"
     local FW_TYPE="$2"
@@ -658,13 +657,12 @@ execute_build() {
     echo -e "\n================== 编译开始 =================="
     echo "日志文件: $BUILD_LOG_PATH"
     
-    # --- 1.5 编译前清理提示 (V4.9.19 新增) ---
+    # --- 1.5 编译前清理提示 (源码目录存在则询问) ---
     local TARGET_DIR_NAME="${FW_TYPE}"
     if [ "$FW_TYPE" == "lede" ]; then TARGET_DIR_NAME="lede"; fi
     local CURRENT_SOURCE_DIR_TEMP="$SOURCE_ROOT/$TARGET_DIR_NAME"
     
     if [ -d "$CURRENT_SOURCE_DIR_TEMP" ]; then
-        # 仅在非批处理模式下询问
         if [[ -z "${IS_BATCH_BUILD+x}" ]]; then
             while true; do
                 echo -e "\n--- 1.5 编译前清理/重置 ---"
@@ -695,7 +693,7 @@ execute_build() {
     
     local CURRENT_SOURCE_DIR_LOCAL="$CURRENT_SOURCE_DIR"
 
-    # 1.5 插入清理
+    # 1.5 插入清理 (在源码目录内执行 make clean/dirclean)
     if ! clean_source_dir "$CONFIG_NAME"; then
         error_handler 1
         return 1
@@ -723,7 +721,7 @@ execute_build() {
         fi
         
         echo -e "\n--- 更新 feeds ---"
-        ./scripts/feeds update -a && ./scripts/feeds install -a
+        ./scripts/feeds update -a && ./scripts/feeds install -a || { echo "❌ 错误: feeds 更新/安装失败。"; exit 1; }
         
         echo -e "\n--- 拉取额外插件 ---"
         local plugin_string="${VARS[EXTRA_PLUGINS]}"
@@ -732,19 +730,18 @@ execute_build() {
         IFS=$'\n' read -rd '' -a plugins <<< "$plugins_array_string"
 
         for plugin_cmd in "${plugins[@]}"; do
-            # 修正点：使用 '&&' 确保语法正确
             [[ -z "$plugin_cmd" ]] && continue
             
             if [[ "$plugin_cmd" =~ git\ clone\ (.*)\ (.*) ]]; then
                 repo_url="${BASH_REMATCH[1]}"
                 target_path="${BASH_REMATCH[2]}"
                 if [ -d "$target_path" ]; then
-                    (cd "$target_path" && git pull)
+                    (cd "$target_path" && git pull) || echo "警告: 插件 $target_path git pull 失败，但继续。"
                 else
-                    $plugin_cmd
+                    $plugin_cmd || { echo "❌ 错误: 插件 $target_path 克隆失败。"; exit 1; }
                 fi
             else
-                eval "$plugin_cmd"
+                eval "$plugin_cmd" || { echo "❌ 错误: 插件命令执行失败。"; exit 1; }
             fi
         done
 
@@ -754,25 +751,42 @@ execute_build() {
             if [ ! -f "$turboacc_script" ]; then
                 curl -sSL https://raw.githubusercontent.com/chenmozhijin/turboacc/luci/add_turboacc.sh -o "$turboacc_script"
             fi
-            bash "$turboacc_script"
+            bash "$turboacc_script" || echo "❌ 警告: Turboacc 配置脚本执行失败。继续编译。"
         fi
 
+        # ----------------------------------------------------------------
+        # 🔥 V4.9.24 修正: 配置文件导入逻辑强化
+        # ----------------------------------------------------------------
         echo -e "\n--- 导入用户配置 ---"
         local config_file_name="${VARS[CONFIG_FILE_NAME]}"
         local source_config_path="$USER_CONFIG_DIR/$config_file_name"
         local CONFIG_FILE_EXTENSION="${config_file_name##*.}"
         
-        if [[ "$CONFIG_FILE_EXTENSION" == "diffconfig" ]]; then
-            cp "$source_config_path" "defconfig"
-            # V4.9.20 优化: 导入 diffconfig 后立即运行 make defconfig
-            echo "正在执行 make defconfig 以扩展 diffconfig 配置..."
-            make defconfig
-        else
-            cp "$source_config_path" ".config"
-            # V4.9.20 优化: 导入 config 后立即运行 make defconfig
-            echo "正在执行 make defconfig 以确认配置..."
-            make defconfig
+        # 强制检查用户配置是否存在
+        if [ ! -f "$source_config_path" ]; then
+            echo "❌ 致命错误：用户配置文件不存在！路径：$source_config_path"
+            exit 1
         fi
+
+        if [[ "$CONFIG_FILE_EXTENSION" == "diffconfig" ]]; then
+            echo "正在复制 $config_file_name 到 defconfig..."
+            cp "$source_config_path" "defconfig" || { echo "❌ 错误: 复制 defconfig 失败。"; exit 1; }
+            echo "正在执行 make defconfig 以扩展 diffconfig 配置..."
+            make defconfig || { echo "❌ 错误: make defconfig 失败。"; exit 1; }
+        else
+            echo "正在复制 $config_file_name 到 .config..."
+            cp "$source_config_path" ".config" || { echo "❌ 错误: 复制 .config 失败。"; exit 1; }
+            echo "正在执行 make defconfig 以确认配置..."
+            # 即使是完整 config，也要运行 defconfig 来解决依赖
+            make defconfig || { echo "❌ 错误: make defconfig 失败。"; exit 1; }
+        fi
+        
+        # 强制检查 .config 是否已生成
+        if [ ! -f .config ]; then
+            echo "❌ 致命错误：导入配置后 .config 文件未生成！"
+            exit 1
+        fi
+        # ----------------------------------------------------------------
 
         run_custom_injections "${VARS[CUSTOM_INJECTIONS]}" "850" "$CURRENT_SOURCE_DIR"
         
@@ -782,9 +796,9 @@ execute_build() {
         sed -i 's/CONFIG_PACKAGE_luci-app-fullconenat=y/# CONFIG_PACKAGE_luci-app-fullconenat is not set/g' .config
 
         echo -e "\n--- 开始编译 (线程: $JOBS_N) ---"
-        # V4.9.20 优化: 使用 make defconfig 替代 oldconfig，确保依赖完全解决
+        # 再次运行 make defconfig 确保所有依赖正确
         echo "再次运行 make defconfig 确保所有依赖正确..."
-        make defconfig
+        make defconfig || { echo "❌ 错误: 最终 make defconfig 失败。"; exit 1; }
         
         local CCACHE_SETTINGS=""
         if command -v ccache &> /dev/null; then
@@ -978,7 +992,7 @@ run_custom_injections() {
     local TARGET_STAGE="$2"
     local CURRENT_SOURCE_DIR="$3"
     
-    if [[ -z "$INJECTIONS_STRING" ]]; then return; fi
+    if [[ -z "$INJECTIONS_STRING" ]]; then return; endif
     
     local injections_array_string=$(echo "$INJECTIONS_STRING" | tr '##' '\n')
     local injections
