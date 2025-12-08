@@ -1,10 +1,11 @@
 #!/bin/bash
 
 # ==========================================================
-# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.30 (语法最终修正版)
-# - 修复: run_custom_injections 函数中，将单行 if 语句修正为 if ... then continue; fi。
+# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.31 (最终稳定版)
+# - 修复: determine_compile_jobs 函数中，将 if 语句的错误闭合 '}' 修正为 '; fi' (第 819 行)。
+# - 修复: run_custom_injections 函数中，将单行 if 语句修正为 if ... then continue; fi (第 981 行)。
 # - 修复: 批量编译菜单 (build_queue_menu) 中，将错误的 'end' 关键字替换为 'done'。
-# - 修复: 彻底清除所有可能污染编译链的环境变量，确保编译环境隔离。
+# - 优化: 彻底清除所有可能污染编译链的环境变量，确保编译环境隔离。
 # ==========================================================
 
 # --- 变量定义 ---
@@ -110,7 +111,7 @@ main_menu() {
     while true; do
         clear
         echo "====================================================="
-        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.30 🔥"
+        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.31 🔥"
         echo "             (纯 .config 配置模式)"
         echo "====================================================="
         echo "1) 🌟 新建机型配置 (Create New Configuration)"
@@ -602,7 +603,7 @@ start_batch_build() {
     read -p "按任意键返回..."
 }
 
-# 4.3 实际执行编译 (V4.9.30 最终修正版)
+# 4.3 实际执行编译 (V4.9.31 最终修正版)
 execute_build() {
     local CONFIG_NAME="$1"
     local FW_TYPE="$2"
@@ -652,13 +653,13 @@ execute_build() {
     # 确定编译线程数
     local JOBS_N=$(determine_compile_jobs)
     
-    # 🔥 V4.9.30 核心修正：所有编译相关操作都在这个唯一的子 Shell 内完成
+    # 🔥 V4.9.31 核心修正：所有编译相关操作都在这个唯一的子 Shell 内完成
     (
         local CURRENT_SOURCE_DIR="$CURRENT_SOURCE_DIR_LOCAL"
         # 强制切换到源码目录，确保后续所有相对路径操作的正确性
         if ! cd "$CURRENT_SOURCE_DIR"; then echo "错误: 无法进入源码目录。"; exit 1; fi
 
-        # V4.9.30: 彻底的环境隔离，防止外部的 Shell 变量污染 toplevel.mk
+        # V4.9.31: 彻底的环境隔离，防止外部的 Shell 变量污染 toplevel.mk
         export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" 
         unset CC CXX LD AR AS CPPFLAGS CFLAGS CXXFLAGS LDFLAGS
         unset HOSTCC HOSTCXX TARGETCC TARGETCXX CCACHE
@@ -760,7 +761,7 @@ execute_build() {
         fi
         # ----------------------------------------------------------------
         
-        # V4.9.30 修正: 处理 Kconfig 冲突和 NAT 冲突
+        # V4.9.31 修正: 处理 Kconfig 冲突和 NAT 冲突
         echo -e "\n--- 处理 Kconfig 冲突和 NAT 冲突 ---"
         if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
             echo "警告: 检测到 luci-app-turboacc 冲突，强制禁用 kmod-nft-fullcone。"
@@ -778,7 +779,7 @@ execute_build() {
         echo "最终运行 make defconfig 确保所有依赖正确..."
         make defconfig || { echo "❌ 错误: 最终 make defconfig 失败。"; exit 1; }
         
-        # V4.9.30 修正: CCACHE 注入逻辑被移除，防止 Shell 语法错误
+        # V4.9.31 修正: CCACHE 注入逻辑被移除，防止 Shell 语法错误
         local CCACHE_SETTINGS=""
         # if command -v ccache &> /dev/null; then
         #     CCACHE_SETTINGS="CC=\"ccache gcc\" CXX=\"ccache g++\""
@@ -816,7 +817,8 @@ determine_compile_jobs() {
     if [ "$mem_jobs" -lt "$cpu_jobs" ] && [ "$mem_jobs" -gt 0 ]; then
         final_jobs="$mem_jobs"
     fi
-    if [ "$final_jobs" -lt 1 ]; then final_jobs=1; }
+    # V4.9.31 修正：将 '}' 修正为 '; fi'
+    if [ "$final_jobs" -lt 1 ]; then final_jobs=1; fi
     echo "$final_jobs"
 }
 
@@ -937,7 +939,7 @@ archive_firmware_and_logs() {
     echo -e "\n--- 归档固件和日志 ---"
     
     local TARGET_DIR_NAME="${FW_TYPE}"
-    if [ "$FW_TYPE" == "lede" ]; then TARGET_DIR_NAME="lede"; }
+    if [ "$FW_TYPE" == "lede" ]; then TARGET_DIR_NAME="lede"; fi
     local CURRENT_SOURCE_DIR="$SOURCE_ROOT/$TARGET_DIR_NAME"
 
     # 查找固件文件
@@ -980,7 +982,7 @@ run_custom_injections() {
     IFS=$'\n' read -rd '' -a injections <<< "$injections_array_string"
     
     for injection in "${injections[@]}"; do
-        if [[ -z "$injection" ]]; then continue; fi # <-- V4.9.30 修正点
+        if [[ -z "$injection" ]]; then continue; fi
         
         local script_name=$(echo "$injection" | awk '{print $1}')
         local stage=$(echo "$injection" | awk '{print $2}')
