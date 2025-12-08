@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================================
-# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.26 (工作目录修正版)
+# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.27 (工作目录修正版)
 # - 修复: 在 execute_build 中，在执行 scripts/feeds 前强制检查并切换到源码目录，解决 Feeds 找不到的问题。
 # - 修复: 彻底重写 execute_build 中配置文件导入逻辑，增加错误检查。
 # - 修复: run_custom_injections 函数中 if 语句的语法错误。
