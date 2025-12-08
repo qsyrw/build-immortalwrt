@@ -992,7 +992,9 @@ run_custom_injections() {
     local TARGET_STAGE="$2"
     local CURRENT_SOURCE_DIR="$3"
     
-    if [[ -z "$INJECTIONS_STRING" ]]; then return; endif
+    if [[ -z "$INJECTIONS_STRING" ]]; then 
+        return
+    fi
     
     local injections_array_string=$(echo "$INJECTIONS_STRING" | tr '##' '\n')
     local injections
