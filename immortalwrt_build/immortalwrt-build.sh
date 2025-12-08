@@ -978,7 +978,7 @@ run_custom_injections() {
     IFS=$'\n' read -rd '' -a injections <<< "$injections_array_string"
     
     for injection in "${injections[@]}"; do
-        if [[ -z "$injection" ]]; then continue; }
+        if [[ -z "$injection" ]]; then continue
         
         local script_name=$(echo "$injection" | awk '{print $1}')
         local stage=$(echo "$injection" | awk '{print $2}')
