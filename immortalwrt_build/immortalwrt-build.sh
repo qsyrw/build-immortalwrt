@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # ==========================================================
-# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.24 (配置导入修复版)
+# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.26 (工作目录修正版)
+# - 修复: 在 execute_build 中，在执行 scripts/feeds 前强制检查并切换到源码目录，解决 Feeds 找不到的问题。
 # - 修复: 彻底重写 execute_build 中配置文件导入逻辑，增加错误检查。
-# - 修复: 解决 make defconfig 找不到 .config 的根本问题。
-# - 修复: 解决 V4.9.23 中所有已知 Bash 语法错误 (if/fi, 插件循环)。
+# - 修复: run_custom_injections 函数中 if 语句的语法错误。
 # - 功能: 纯 .config 模式，支持批量编译、插件管理、脚本注入、固件清理。
 # ==========================================================
 
@@ -112,7 +112,7 @@ main_menu() {
     while true; do
         clear
         echo "====================================================="
-        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.24 🔥"
+        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.26 🔥"
         echo "             (纯 .config 配置模式)"
         echo "====================================================="
         echo "1) 🌟 新建机型配置 (Create New Configuration)"
@@ -205,7 +205,7 @@ select_config() {
             echo ""
             echo "当前选择: **$SELECTED_NAME**"
             read -p "选择操作：1) 编辑配置 | 2) 删除配置 | 3) 返回主菜单: " action
-            case "$action" in
+            case "$action" in   
                 1) config_interaction "$SELECTED_NAME" "edit" ;;
                 2) delete_config "$SELECTED_NAME" ;;
                 3) return ;;
@@ -644,7 +644,7 @@ start_batch_build() {
     read -p "按任意键返回..."
 }
 
-# 4.3 实际执行编译 (V4.9.24 修复版)
+# 4.3 实际执行编译 (V4.9.26 修正版)
 execute_build() {
     local CONFIG_NAME="$1"
     local FW_TYPE="$2"
@@ -721,6 +721,15 @@ execute_build() {
         fi
         
         echo -e "\n--- 更新 feeds ---"
+        
+        # 🔥 V4.9.26 修正：在执行 feeds 前，强制检查并切换到正确的源码目录
+        if [ "$PWD" != "$CURRENT_SOURCE_DIR" ]; then
+            echo "❌ 致命错误：工作目录意外切换到 $(pwd)。尝试修复..."
+            cd "$CURRENT_SOURCE_DIR" || { echo "❌ 修复失败，无法切换目录。"; exit 1; }
+        fi
+        # 强制添加执行权限，以防万一
+        chmod +x ./scripts/feeds 2>/dev/null 
+
         ./scripts/feeds update -a && ./scripts/feeds install -a || { echo "❌ 错误: feeds 更新/安装失败。"; exit 1; }
         
         echo -e "\n--- 拉取额外插件 ---"
@@ -755,7 +764,7 @@ execute_build() {
         fi
 
         # ----------------------------------------------------------------
-        # 🔥 V4.9.24 修正: 配置文件导入逻辑强化
+        # V4.9.24 修正: 配置文件导入逻辑强化
         # ----------------------------------------------------------------
         echo -e "\n--- 导入用户配置 ---"
         local config_file_name="${VARS[CONFIG_FILE_NAME]}"
@@ -797,7 +806,7 @@ execute_build() {
 
         echo -e "\n--- 开始编译 (线程: $JOBS_N) ---"
         # 再次运行 make defconfig 确保所有依赖正确
-        echo "再次运行 make defconfig 确保所有依赖正确..."
+        echo "最终运行 make defconfig 确保所有依赖正确..."
         make defconfig || { echo "❌ 错误: 最终 make defconfig 失败。"; exit 1; }
         
         local CCACHE_SETTINGS=""
