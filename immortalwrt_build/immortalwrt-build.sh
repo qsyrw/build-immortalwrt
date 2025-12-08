@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # ==========================================================
-# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.27 (工作目录修正版)
-# - 修复: 在 execute_build 中，在执行 scripts/feeds 前强制检查并切换到源码目录，解决 Feeds 找不到的问题。
-# - 修复: 彻底重写 execute_build 中配置文件导入逻辑，增加错误检查。
-# - 修复: run_custom_injections 函数中 if 语句的语法错误。
+# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.28 (环境隔离/配置修正版)
+# - 修复: 在 execute_build 中，彻底清除所有可能污染编译链的环境变量 (CC, CCACHE, HOSTCC等)。
+# - 修复: 强制禁用 CCACHE 注入，解决 toplevel.mk 处出现的 Shell 语法错误。
+# - 修复: 在 .config 导入后，自动禁用 luci-app-turboacc 相关的递归依赖项。
 # - 功能: 纯 .config 模式，支持批量编译、插件管理、脚本注入、固件清理。
 # ==========================================================
 
@@ -41,7 +41,6 @@ check_and_install_dependencies() {
     echo "## 检查并安装编译依赖..."
     
     # 核心依赖列表，用于最终安装提示
-    local CORE_DEPENDENCIES="build-essential git make gcc g++ binutils zlib1g-dev libncurses5-dev gawk python3 perl wget curl unzip procps lscpu free ccache"
     local INSTALL_DEPENDENCIES="ack antlr3 asciidoc autoconf automake autopoint bison build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man intltool libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libmpc-dev libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply python3-pyelftools qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd uuid-runtime zip procps util-linux"
     
     if command -v ccache &> /dev/null; then
@@ -53,7 +52,7 @@ check_and_install_dependencies() {
 
     local missing_deps=""
     
-    # 🌟 优化点：明确指定需要通过 command -v 检测的工具，排除元软件包和库文件
+    # 🌟 优化点：明确指定需要通过 command -v 检测的工具
     local CHECKABLE_TOOLS="git make gcc g++ gawk python3 perl wget curl unzip procps lscpu free"
     
     # 循环检测可执行工具
@@ -112,25 +111,23 @@ main_menu() {
     while true; do
         clear
         echo "====================================================="
-        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.26 🔥"
+        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.28 🔥"
         echo "             (纯 .config 配置模式)"
         echo "====================================================="
         echo "1) 🌟 新建机型配置 (Create New Configuration)"
         echo "2) ⚙️ 选择/编辑/删除机型配置 (Select/Edit/Delete Configuration)"
         echo "3) 🚀 编译固件 (Start Build Process)"
         echo "4) 📦 **批量编译队列 (Build Queue)**"
-        echo "5) 🗑️ **固件清理工具 (Cleanup Utility)**"
-        echo "6) 🚪 退出 (Exit)"
+        echo "5) 🚪 退出 (Exit)"
         echo "-----------------------------------------------------"
-        read -p "请选择功能 (1-6): " choice
+        read -p "请选择功能 (1-5): " choice
         
         case $choice in
             1) create_config ;;
             2) select_config ;;
             3) start_build_process ;;
             4) build_queue_menu ;;
-            5) cleanup_menu ;;
-            6) echo "退出脚本。再见！"; exit 0 ;;
+            5) echo "退出脚本。再见！"; exit 0 ;;
             *) echo "无效选择，请重新输入。"; sleep 1 ;;
         esac
     done
@@ -205,7 +202,7 @@ select_config() {
             echo ""
             echo "当前选择: **$SELECTED_NAME**"
             read -p "选择操作：1) 编辑配置 | 2) 删除配置 | 3) 返回主菜单: " action
-            case "$action" in   
+            case "$action" in
                 1) config_interaction "$SELECTED_NAME" "edit" ;;
                 2) delete_config "$SELECTED_NAME" ;;
                 3) return ;;
@@ -321,46 +318,8 @@ config_interaction() {
     done
 }
 
-# 3.4 清理源码目录
-clean_source_dir() {
-    local CONFIG_NAME="$1"
-    local CONFIG_FILE="$CONFIGS_DIR/$CONFIG_NAME.conf"
-    
-    local FW_TYPE=$(grep 'FW_TYPE="' "$CONFIG_FILE" | cut -d'"' -f2)
-    local TARGET_DIR_NAME="$FW_TYPE"
-    if [ "$FW_TYPE" == "lede" ]; then TARGET_DIR_NAME="lede"; fi
-    
-    local CURRENT_SOURCE_DIR="$SOURCE_ROOT/$TARGET_DIR_NAME"
-
-    if [ ! -d "$CURRENT_SOURCE_DIR" ]; then
-        echo "警告: 源码目录不存在，无需清理。"
-        return 0
-    fi
-    
-    (
-        cd "$CURRENT_SOURCE_DIR" || { echo "错误: 无法进入源码目录进行清理。"; return 1; }
-
-        while true; do
-            clear
-            echo "## 🛡️ 源码清理模式选择"
-            echo "当前源码目录: $CURRENT_SOURCE_DIR"
-            echo "-----------------------------------------------------"
-            echo "1) 🧹 **标准清理 (make clean)**"
-            echo "2) 彻底清理 (make dirclean)"
-            echo "3) 🔄 跳过清理"
-            echo "-----------------------------------------------------"
-            read -p "请选择清理模式 (1/2/3): " clean_choice
-
-            case $clean_choice in
-                1) make clean || { echo "错误: make clean 失败。"; exit 1; }; echo "✅ 标准清理完成。"; exit 0 ;;
-                2) make dirclean || { echo "错误: make dirclean 失败。"; exit 1; }; echo "✅ 彻底清理完成。"; exit 0 ;;
-                3) echo "--- 跳过清理 ---"; exit 0 ;;
-                *) echo "无效选择。"; sleep 1 ;;
-            esac
-        done
-    ) 
-    return $?
-}
+# 3.4 清理源码目录 (已废弃，功能内嵌到 execute_build)
+# clean_source_dir() { ... } 
 
 # 3.6 保存配置到文件
 save_config_from_array() {
@@ -441,7 +400,7 @@ validate_build_config() {
     fi
 }
 
-# 4.0 源码管理 (简单粗暴版 V4.9.19)
+# 4.0 源码管理
 clone_or_update_source() {
     local FW_TYPE="$1"
     local FW_BRANCH="$2"
@@ -591,7 +550,7 @@ build_queue_menu() {
                         local new_queue=()
                         for item in "${queue[@]}"; do
                             if [ "$item" != "$config_name_to_toggle" ]; then new_queue+=("$item"); fi
-                        done
+                        end
                         queue=("${new_queue[@]}")
                         echo "配置已移除。"
                     else
@@ -615,7 +574,36 @@ build_queue_menu() {
     done
 }
 
-# 4.3 实际执行编译 (V4.9.27 最终修正版)
+# 4.5 启动批量编译
+start_batch_build() {
+    local -n queue_ref=$1
+    echo -e "\n================== 批处理编译启动 =================="
+    export IS_BATCH_BUILD=1
+    
+    for config_name in "${queue_ref[@]}"; do
+        echo -e "\n--- [批处理任务] 开始编译: **$config_name** ---"
+        local CONFIG_FILE="$CONFIGS_DIR/$config_name.conf"
+        declare -A BATCH_VARS
+        
+        while IFS='=' read -r key value; do
+            if [[ "$key" =~ ^[A-Z_]+$ ]]; then
+                BATCH_VARS["$key"]=$(echo "$value" | sed 's/^"//;s/"$//')
+            fi
+        done < "$CONFIG_FILE"
+        
+        if validate_build_config BATCH_VARS "$config_name"; then
+            execute_build "$config_name" "${BATCH_VARS[FW_TYPE]}" "${BATCH_VARS[FW_BRANCH]}" BATCH_VARS
+            if [ $? -eq 0 ]; then echo "✅ 编译成功。"; else echo "❌ 编译失败，跳过。"; fi
+        else
+            echo "❌ 校验失败，跳过。"
+        fi
+    done
+    unset IS_BATCH_BUILD
+    echo -e "\n================== 批处理完成 =================="
+    read -p "按任意键返回..."
+}
+
+# 4.3 实际执行编译 (V4.9.28 最终修正版)
 execute_build() {
     local CONFIG_NAME="$1"
     local FW_TYPE="$2"
@@ -665,15 +653,16 @@ execute_build() {
     # 确定编译线程数
     local JOBS_N=$(determine_compile_jobs)
     
-    # 🔥 V4.9.27 核心修正：所有编译相关操作都在这个唯一的子 Shell 内完成
+    # 🔥 V4.9.28 核心修正：所有编译相关操作都在这个唯一的子 Shell 内完成
     (
         local CURRENT_SOURCE_DIR="$CURRENT_SOURCE_DIR_LOCAL"
         # 强制切换到源码目录，确保后续所有相对路径操作的正确性
         if ! cd "$CURRENT_SOURCE_DIR"; then echo "错误: 无法进入源码目录。"; exit 1; fi
 
-        # V4.9.16: 环境隔离
+        # V4.9.28: 彻底的环境隔离，防止外部的 Shell 变量污染 toplevel.mk
         export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" 
         unset CC CXX LD AR AS CPPFLAGS CFLAGS CXXFLAGS LDFLAGS
+        unset HOSTCC HOSTCXX TARGETCC TARGETCXX CCACHE
         
         local GIT_COMMIT_ID=$(git rev-parse --short HEAD 2>/dev/null || echo "UnknownCommit")
         
@@ -685,7 +674,6 @@ execute_build() {
             echo "2) 彻底清理 (make dirclean)"
             echo "3) 🔄 跳过清理"
             echo "-----------------------------------------------------"
-            # 注意：在子 Shell 中，交互式读取用户输入可能需要 /dev/tty
             read -p "请选择清理模式 (1/2/3): " clean_choice
             
             case $clean_choice in
@@ -707,7 +695,6 @@ execute_build() {
         fi
         
         echo -e "\n--- 更新 feeds ---"
-        # 目录已经在 $CURRENT_SOURCE_DIR，无需再次检查
         chmod +x ./scripts/feeds 2>/dev/null # 强制授权
         ./scripts/feeds update -a && ./scripts/feeds install -a || { echo "❌ 错误: feeds 更新/安装失败。"; exit 1; }
         
@@ -773,6 +760,13 @@ execute_build() {
             exit 1
         fi
         # ----------------------------------------------------------------
+        
+        # V4.9.28 修正: 处理 Kconfig 递归依赖
+        echo -e "\n--- 处理 Kconfig 冲突和 NAT 冲突 ---"
+        if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
+            echo "警告: 检测到 luci-app-turboacc 冲突，强制禁用 kmod-nft-fullcone。"
+            sed -i 's/CONFIG_PACKAGE_kmod-nft-fullcone=y/# CONFIG_PACKAGE_kmod-nft-fullcone is not set/g' .config
+        fi
 
         run_custom_injections "${VARS[CUSTOM_INJECTIONS]}" "850" "$CURRENT_SOURCE_DIR"
         
@@ -785,10 +779,11 @@ execute_build() {
         echo "最终运行 make defconfig 确保所有依赖正确..."
         make defconfig || { echo "❌ 错误: 最终 make defconfig 失败。"; exit 1; }
         
+        # V4.9.28 修正: CCACHE 注入逻辑被移除，防止 Shell 语法错误
         local CCACHE_SETTINGS=""
-        if command -v ccache &> /dev/null; then
-            CCACHE_SETTINGS="CC=\"ccache gcc\" CXX=\"ccache g++\""
-        fi
+        # if command -v ccache &> /dev/null; then
+        #     CCACHE_SETTINGS="CC=\"ccache gcc\" CXX=\"ccache g++\""
+        # fi
         
         make -j"$JOBS_N" V=s $CCACHE_SETTINGS 2>&1 | tee "$BUILD_LOG_PATH"
         
