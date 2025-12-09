@@ -1,9 +1,10 @@
 #!/bin/bash
 
 # ==========================================================
-# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.34 (最终精简优化版)
-# - 优化: 彻底移除所有硬编码的插件逻辑和冲突处理。
-# - 增强: run_custom_injections 模块具备独立日志和精确错误捕获。
+# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.35 (最终稳定版)
+# - 优化: run_custom_injections 模块具备独立日志和精确错误捕获。
+# - 修正: 增强 manage_injections_menu，支持自动转换 GitHub 网页链接为 Raw 链接。
+# - 修正: 修复依赖检查中对 procps 的误判。
 # ==========================================================
 
 # --- 变量定义 ---
@@ -31,9 +32,10 @@ CONFIG_VAR_NAMES=(FW_TYPE FW_BRANCH CONFIG_FILE_NAME EXTRA_PLUGINS CUSTOM_INJECT
 # 动态变量
 CURRENT_SOURCE_DIR=""
 
+
 # --- 核心目录和依赖初始化 ---
 
-# 1.1 检查并安装编译依赖
+# 1.1 检查并安装编译依赖 (已优化 procps 检查)
 check_and_install_dependencies() {
     echo "## 检查并安装编译依赖..."
     
@@ -49,7 +51,7 @@ check_and_install_dependencies() {
 
     local missing_deps=""
     
-    # 🌟 优化点：明确指定需要通过 command -v 检测的工具 (已移除 procps)
+    # 🌟 优化点：明确指定需要通过 command -v 检测的工具 (已移除 procps，依赖其提供的 free 等工具)
     local CHECKABLE_TOOLS="git make gcc g++ gawk python3 perl wget curl unzip lscpu free"
     
     # 循环检测可执行工具
@@ -79,7 +81,6 @@ check_and_install_dependencies() {
         fi
     elif command -v yum &> /dev/null; then
         echo -e "\n--- 正在尝试安装依赖 (CentOS/RHEL) ---"
-        # yum 不支持 -y 的软件包列表
         echo "请手动检查并安装以下依赖：$INSTALL_DEPENDENCIES"
     else
         echo -e "\n**警告:** 无法自动安装依赖。请确保以下软件包已安装:\n$INSTALL_DEPENDENCIES"
@@ -108,7 +109,7 @@ main_menu() {
     while true; do
         clear
         echo "====================================================="
-        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.34 🔥"
+        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.35 🔥"
         echo "             (纯 .config 配置模式)"
         echo "====================================================="
         echo "1) 🌟 新建机型配置 (Create New Configuration)"
@@ -374,6 +375,8 @@ validate_build_config() {
             if [[ -z "$injection" ]]; then continue; fi
             local script_path_url=$(echo "$injection" | awk '{print $1}')
             local full_script_path="$EXTRA_SCRIPT_DIR/$script_path_url"
+            
+            # 仅检查本地文件是否存在，远程文件已在 manage_injections_menu 中下载
             if [[ ! -f "$full_script_path" ]]; then
                 echo "❌ 错误：本地注入脚本不存在: $full_script_path"
                 error_count=$((error_count + 1))
@@ -510,7 +513,7 @@ build_queue_menu() {
         clear
         echo "====================================================="
         echo "        📦 批量编译队列 (共 ${#queue[@]} 个任务)"
-        echo "====================================================="
+        echo "================================================----"
         
         echo "--- 待选配置 ---"
         i=1
@@ -541,7 +544,7 @@ build_queue_menu() {
                         local new_queue=()
                         for item in "${queue[@]}"; do
                             if [ "$item" != "$config_name_to_toggle" ]; then new_queue+=("$item"); fi
-                        done 
+                        end 
                         queue=("${new_queue[@]}")
                         echo "配置已移除。"
                     else
@@ -594,7 +597,7 @@ start_batch_build() {
     read -p "按任意键返回..."
 }
 
-# 4.3 实际执行编译 (V4.9.34 最终精简版)
+# 4.3 实际执行编译 (V4.9.35 最终精简版)
 execute_build() {
     local CONFIG_NAME="$1"
     local FW_TYPE="$2"
@@ -846,16 +849,18 @@ manage_plugins_menu() {
     done
 }
 
+# 6.1 注入管理菜单 (已修正远程链接下载逻辑)
 manage_injections_menu() {
     local -n vars_array=$1
     while true; do
         clear
-        echo "🧩 脚本注入管理"
+        echo "⚙️ 脚本注入管理 (脚本文件存放于: $EXTRA_SCRIPT_DIR)"
         local current="${vars_array[CUSTOM_INJECTIONS]}"
         local inj_array=($(echo "$current" | tr '##' '\n' | sed '/^$/d'))
         
         for i in "${!inj_array[@]}"; do echo "$((i+1))) ${inj_array[$i]}"; done
-        echo "A) 添加本地  U) 添加远程  D) 删除  R) 返回"
+        echo "----------------------------------------------------"
+        echo "A) 添加本地脚本  U) **添加远程脚本 (自动转换 Raw)** D) 删除  R) 返回"
         read -p "选择: " choice
         
         case $choice in
@@ -867,18 +872,34 @@ manage_injections_menu() {
                 
                 read -p "脚本序号: " idx; local sname="${file_list[$idx]}"
                 if [[ -n "$sname" ]]; then
-                    read -p "阶段 (100/850): " stage
+                    read -p "阶段 (如 100/850): " stage
                     local new="$sname $stage"
                     if [[ -z "$current" ]]; then vars_array[CUSTOM_INJECTIONS]="$new"; else vars_array[CUSTOM_INJECTIONS]="${current}##${new}"; fi
                 fi ;;
             U|u)
-                read -p "URL: " url
+                read -p "请输入远程 URL (支持 GitHub 网页链接): " url
                 if [[ "$url" =~ ^http ]]; then
-                    local fname=$(basename "$url")
-                    curl -sSL "$url" -o "$EXTRA_SCRIPT_DIR/$fname" && echo "下载成功"
-                    read -p "阶段 (100/850): " stage
-                    local new="$fname $stage"
-                    if [[ -z "$current" ]]; then vars_array[CUSTOM_INJECTIONS]="$new"; else vars_array[CUSTOM_INJECTIONS]="${current}##${new}"; fi
+                    local download_url="$url"
+                    
+                    # 修正：自动将 GitHub 网页链接转换为 Raw 链接
+                    if [[ "$url" =~ github.com ]]; then
+                        download_url=$(echo "$url" | sed 's/github.com/raw.githubusercontent.com/' | sed 's/blob\///')
+                        echo "ℹ️ 已自动转换为 Raw 链接: $download_url"
+                    fi
+                    
+                    local fname=$(basename "$url") 
+                    
+                    echo "正在尝试从 $download_url 下载 $fname..."
+                    curl -sSL "$download_url" -o "$EXTRA_SCRIPT_DIR/$fname"
+                    
+                    if [ $? -eq 0 ]; then
+                        echo "✅ 脚本下载成功并保存为: $fname"
+                        read -p "请输入执行阶段 (如 100/850): " stage
+                        local new="$fname $stage"
+                        if [[ -z "$current" ]]; then vars_array[CUSTOM_INJECTIONS]="$new"; else vars_array[CUSTOM_INJECTIONS]="${current}##${new}"; fi
+                    else
+                        echo "❌ 脚本下载失败，请检查 URL 或网络连接。"
+                    fi
                 fi ;;
             D|d)
                 read -p "序号: " idx
@@ -935,7 +956,7 @@ archive_firmware_and_logs() {
     fi
 }
 
-# 6.0 核心模块：运行自定义脚本注入 (V4.9.34 优化)
+# 6.0 核心模块：运行自定义脚本注入 (V4.9.35 优化)
 run_custom_injections() {
     local INJECTIONS_STRING="$1"
     local TARGET_STAGE="$2"
