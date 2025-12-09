@@ -9,7 +9,7 @@ set -euo pipefail
 # --- 脚本设置 (请根据您的需求修改) ---
 TARGET_IP="10.0.11.1" 
 TARGET_SSID="ImmortalWrt-Custom"
-TARGET_KEY="custompassword" # Wi-Fi 密码
+TARGET_KEY="123456789" # Wi-Fi 密码
 # 🌟 关键修正：确保 Wi-Fi 启动所必需的国家代码
 TARGET_COUNTRY="CN"         # 强烈建议设置为 CN (中国) 或您所在地的国家代码
 
