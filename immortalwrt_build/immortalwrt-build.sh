@@ -1,11 +1,9 @@
 #!/bin/bash
 
 # ==========================================================
-# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.31 (最终稳定版)
-# - 修复: determine_compile_jobs 函数中，将 if 语句的错误闭合 '}' 修正为 '; fi' (第 819 行)。
-# - 修复: run_custom_injections 函数中，将单行 if 语句修正为 if ... then continue; fi (第 981 行)。
-# - 修复: 批量编译菜单 (build_queue_menu) 中，将错误的 'end' 关键字替换为 'done'。
-# - 优化: 彻底清除所有可能污染编译链的环境变量，确保编译环境隔离。
+# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.33 (最终精简版)
+# - 优化: 彻底移除 Turboacc 的内置逻辑和所有硬编码的 NAT/Kconfig 冲突处理。
+# - 优化: run_custom_injections 阶段 850 注入点被独立恢复，确保自定义脚本能进行配置清理。
 # ==========================================================
 
 # --- 变量定义 ---
@@ -27,8 +25,8 @@ OUTPUT_DIR="$BUILD_ROOT/output"             # 存放最终固件的输出目录
 BUILD_LOG_PATH=""
 BUILD_TIME_STAMP=$(date +%Y%m%d_%H%M)
 
-# 配置变量名称列表
-CONFIG_VAR_NAMES=(FW_TYPE FW_BRANCH CONFIG_FILE_NAME EXTRA_PLUGINS CUSTOM_INJECTIONS ENABLE_QMODEM ENABLE_TURBOACC)
+# 配置文件变量列表 (已移除 ENABLE_TURBOACC)
+CONFIG_VAR_NAMES=(FW_TYPE FW_BRANCH CONFIG_FILE_NAME EXTRA_PLUGINS CUSTOM_INJECTIONS ENABLE_QMODEM)
 
 # 动态变量
 CURRENT_SOURCE_DIR=""
@@ -111,7 +109,7 @@ main_menu() {
     while true; do
         clear
         echo "====================================================="
-        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.31 🔥"
+        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.33 🔥"
         echo "             (纯 .config 配置模式)"
         echo "====================================================="
         echo "1) 🌟 新建机型配置 (Create New Configuration)"
@@ -237,7 +235,6 @@ config_interaction() {
     : ${config_vars[EXTRA_PLUGINS]:=""}
     : ${config_vars[CUSTOM_INJECTIONS]:=""}
     : ${config_vars[ENABLE_QMODEM]:="n"}
-    : ${config_vars[ENABLE_TURBOACC]:="n"}
     
     while true; do
         clear
@@ -261,12 +258,11 @@ config_interaction() {
         echo "4. ⚙️ **脚本注入管理** (管理): $injection_count 条"
         
         echo "5. [${config_vars[ENABLE_QMODEM]^^}] 内置 Qmodem"
-        echo "6. [${config_vars[ENABLE_TURBOACC]^^}] 内置 Turboacc"
-        echo -e "\n7. ⚠️ **检查配置文件的位置和名称**"
+        echo -e "\n6. ⚠️ **检查配置文件的位置和名称**" # 序号已修改
 
         echo "-----------------------------------------------------"
         echo "S) 保存配置并返回 | R) 放弃修改并返回"
-        read -p "请选择要修改的项 (1-7, S/R): " sub_choice
+        read -p "请选择要修改的项 (1-6, S/R): " sub_choice
         
         case $sub_choice in
             1) 
@@ -292,8 +288,7 @@ config_interaction() {
             3) manage_plugins_menu config_vars ;;
             4) manage_injections_menu config_vars ;;
             5) config_vars[ENABLE_QMODEM]=$([[ "${config_vars[ENABLE_QMODEM]}" == "y" ]] && echo "n" || echo "y") ;;
-            6) config_vars[ENABLE_TURBOACC]=$([[ "${config_vars[ENABLE_TURBOACC]}" == "y" ]] && echo "n" || echo "y") ;;
-            7) 
+            6) 
                 local config_path="$USER_CONFIG_DIR/${config_vars[CONFIG_FILE_NAME]}"
                 if [ -f "$config_path" ]; then
                     echo -e "\n✅ 文件存在: $config_path"
@@ -317,9 +312,6 @@ config_interaction() {
         esac
     done
 }
-
-# 3.4 清理源码目录 (已废弃，功能内嵌到 execute_build)
-# clean_source_dir() { ... } 
 
 # 3.6 保存配置到文件
 save_config_from_array() {
@@ -375,7 +367,7 @@ validate_build_config() {
     fi
     
     if [[ -n "${VARS[CUSTOM_INJECTIONS]}" ]]; then
-        local injections_array_string=$(echo "${VARS[CUSTOM_INJECTIONS]}" | tr '##' '\n')
+        local injections_array_string=$(echo "$INJECTIONS_STRING" | tr '##' '\n')
         local injections
         IFS=$'\n' read -rd '' -a injections <<< "$injections_array_string"
         
@@ -603,7 +595,7 @@ start_batch_build() {
     read -p "按任意键返回..."
 }
 
-# 4.3 实际执行编译 (V4.9.31 最终修正版)
+# 4.3 实际执行编译 (V4.9.33 最终精简版)
 execute_build() {
     local CONFIG_NAME="$1"
     local FW_TYPE="$2"
@@ -653,13 +645,13 @@ execute_build() {
     # 确定编译线程数
     local JOBS_N=$(determine_compile_jobs)
     
-    # 🔥 V4.9.31 核心修正：所有编译相关操作都在这个唯一的子 Shell 内完成
+    # 🔥 核心修正：所有编译相关操作都在这个唯一的子 Shell 内完成
     (
         local CURRENT_SOURCE_DIR="$CURRENT_SOURCE_DIR_LOCAL"
         # 强制切换到源码目录，确保后续所有相对路径操作的正确性
         if ! cd "$CURRENT_SOURCE_DIR"; then echo "错误: 无法进入源码目录。"; exit 1; fi
 
-        # V4.9.31: 彻底的环境隔离，防止外部的 Shell 变量污染 toplevel.mk
+        # 彻底的环境隔离，防止外部的 Shell 变量污染 toplevel.mk
         export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" 
         unset CC CXX LD AR AS CPPFLAGS CFLAGS CXXFLAGS LDFLAGS
         unset HOSTCC HOSTCXX TARGETCC TARGETCXX CCACHE
@@ -714,21 +706,11 @@ execute_build() {
                     (cd "$target_path" && git pull) || echo "警告: 插件 $target_path git pull 失败，但继续。"
                 else
                     $plugin_cmd || { echo "❌ 错误: 插件 $target_path 克隆失败。"; exit 1; }
-                fi
+                }
             else
                 eval "$plugin_cmd" || { echo "❌ 错误: 插件命令执行失败。"; exit 1; }
             fi
         done
-
-        if [[ "${VARS[ENABLE_TURBOACC]}" == "y" ]]; then
-            echo -e "\n--- 配置 Turboacc ---"
-            local turboacc_script="$EXTRA_SCRIPT_DIR/add_turboacc.sh"
-            if [ ! -f "$turboacc_script" ]; then
-                curl -sSL https://raw.githubusercontent.com/chenmozhijin/turboacc/luci/add_turboacc.sh -o "$turboacc_script"
-            fi
-            # 确保在源码目录下运行
-            bash "$turboacc_script" || echo "❌ 警告: Turboacc 配置脚本执行失败。继续编译。"
-        fi
 
         # ----------------------------------------------------------------
         # 配置文件导入逻辑
@@ -760,30 +742,16 @@ execute_build() {
             exit 1
         fi
         # ----------------------------------------------------------------
-        
-        # V4.9.31 修正: 处理 Kconfig 冲突和 NAT 冲突
-        echo -e "\n--- 处理 Kconfig 冲突和 NAT 冲突 ---"
-        if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
-            echo "警告: 检测到 luci-app-turboacc 冲突，强制禁用 kmod-nft-fullcone。"
-            sed -i 's/CONFIG_PACKAGE_kmod-nft-fullcone=y/# CONFIG_PACKAGE_kmod-nft-fullcone is not set/g' .config
-        fi
 
+        # --- 4. 运行配置后自定义注入 (阶段 850) ---
+        # 🚨 注意：所有配置清理和修改 .config 的逻辑都应在此阶段的注入脚本中执行。
         run_custom_injections "${VARS[CUSTOM_INJECTIONS]}" "850" "$CURRENT_SOURCE_DIR"
         
-        # 强制清除 NAT 冲突
-        sed -i 's/CONFIG_PACKAGE_kmod-ipt-fullconenat=y/# CONFIG_PACKAGE_kmod-ipt-fullconenat is not set/g' .config
-        sed -i 's/CONFIG_PACKAGE_kmod-nat-fullconenat=y/# CONFIG_PACKAGE_kmod-nat-fullconenat is not set/g' .config
-        sed -i 's/CONFIG_PACKAGE_luci-app-fullconenat=y/# CONFIG_PACKAGE_luci-app-fullconenat is not set/g' .config
-
         echo -e "\n--- 开始编译 (线程: $JOBS_N) ---"
         echo "最终运行 make defconfig 确保所有依赖正确..."
         make defconfig || { echo "❌ 错误: 最终 make defconfig 失败。"; exit 1; }
         
-        # V4.9.31 修正: CCACHE 注入逻辑被移除，防止 Shell 语法错误
         local CCACHE_SETTINGS=""
-        # if command -v ccache &> /dev/null; then
-        #     CCACHE_SETTINGS="CC=\"ccache gcc\" CXX=\"ccache g++\""
-        # fi
         
         make -j"$JOBS_N" V=s $CCACHE_SETTINGS 2>&1 | tee "$BUILD_LOG_PATH"
         
@@ -799,11 +767,7 @@ execute_build() {
     
     local EXECUTE_STATUS=$?
     if [ "$EXECUTE_STATUS" -ne 0 ]; then
-        error_handler "$EXECUTE_STATUS"
-        return 1
-    fi
-    return 0
-}
+        error_handler
 
 # --- 5. 工具 ---
 
@@ -817,7 +781,7 @@ determine_compile_jobs() {
     if [ "$mem_jobs" -lt "$cpu_jobs" ] && [ "$mem_jobs" -gt 0 ]; then
         final_jobs="$mem_jobs"
     fi
-    # V4.9.31 修正：将 '}' 修正为 '; fi'
+    # 修正后的单行 if 语句
     if [ "$final_jobs" -lt 1 ]; then final_jobs=1; fi
     echo "$final_jobs"
 }
