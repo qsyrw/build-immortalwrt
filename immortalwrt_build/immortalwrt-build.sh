@@ -394,7 +394,7 @@ validate_build_config() {
     fi
 }
 
-# 4.0 源码管理
+# 4.0 源码管理 (已增强：采用备份/恢复策略处理 Git 冲突)
 clone_or_update_source() {
     local FW_TYPE="$1"
     local FW_BRANCH="$2"
@@ -406,30 +406,74 @@ clone_or_update_source() {
         openwrt) REPO="https://github.com/openwrt/openwrt" ;;
         immortalwrt) REPO="https://github.com/immortalwrt/immortalwrt" ;;
         lede) REPO="https://github.com/coolsnowwolf/lede" ; TARGET_DIR_NAME="lede" ;;
-        *) echo "错误: 固件类型未知 ($FW_TYPE)。" >> "$BUILD_LOG_PATH" && return 1 ;;
+        *) echo "错误: 固件类型未知 ($FW_TYPE)。" | tee -a "$BUILD_LOG_PATH" && return 1 ;;
     esac
 
     local CURRENT_SOURCE_DIR="$SOURCE_ROOT/$TARGET_DIR_NAME"
-    echo "--- 源码目录: $CURRENT_SOURCE_DIR ---"
-    echo -e "\n--- 4.0 源码拉取/更新 ---"
+    echo "--- 源码目录: $CURRENT_SOURCE_DIR ---" | tee -a "$BUILD_LOG_PATH"
+    echo -e "\n--- 4.0 源码拉取/更新 ---" | tee -a "$BUILD_LOG_PATH"
 
     if [ -d "$CURRENT_SOURCE_DIR/.git" ]; then
-        echo "源码目录已存在，尝试更新..."
+        echo "源码目录已存在，尝试更新..." | tee -a "$BUILD_LOG_PATH"
         (
             cd "$CURRENT_SOURCE_DIR" || exit 1
-            git checkout "$FW_BRANCH" || (echo "错误: 分支切换失败。" >> "$BUILD_LOG_PATH" && exit 1)
-            git pull origin "$FW_BRANCH" || echo "警告: Git pull 失败，但继续。"
+            git checkout "$FW_BRANCH" || (echo "错误: 分支切换失败。" | tee -a "$BUILD_LOG_PATH" && exit 1)
+            
+            # 1. 检查并备份所有本地修改的文件
+            local modified_files=$(git status --porcelain | grep -E '^( M|M )' | awk '{print $2}')
+            local TEMP_BACKUP_DIR="$BUILD_ROOT/git_backup_$(date +%s)"
+            
+            if [ -n "$modified_files" ]; then
+                echo "--- 发现本地修改的文件，正在进行备份/恢复处理 ---" | tee -a "$BUILD_LOG_PATH"
+                mkdir -p "$TEMP_BACKUP_DIR"
+                
+                echo "$modified_files" | while read -r file; do
+                    local relative_path="$file"
+                    local backup_path="$TEMP_BACKUP_DIR/$relative_path"
+                    
+                    # 确保备份目录结构存在
+                    mkdir -p "$(dirname "$backup_path")"
+                    
+                    # 备份文件
+                    cp -f "$relative_path" "$backup_path"
+                    
+                    # 强制 Git 接受上游版本，避免 pull 冲突
+                    git checkout -- "$relative_path"
+                    
+                    echo "已备份并重置: $relative_path" | tee -a "$BUILD_LOG_PATH"
+                done
+                
+                # 执行 Git Pull
+                git pull origin "$FW_BRANCH" || echo "警告: Git pull 失败，但继续。" | tee -a "$BUILD_LOG_PATH"
+                
+                # 3. 恢复备份文件
+                echo "--- Git Pull 完成，正在恢复本地修改文件 ---" | tee -a "$BUILD_LOG_PATH"
+                find "$TEMP_BACKUP_DIR" -type f | while read -r backup_file; do
+                    local relative_path="${backup_file#$TEMP_BACKUP_DIR/}"
+                    cp -f "$backup_file" "$relative_path"
+                    echo "已恢复: $relative_path" | tee -a "$BUILD_LOG_PATH"
+                done
+                
+                # 清理临时备份目录
+                rm -rf "$TEMP_BACKUP_DIR"
+                echo "✅ 备份/恢复流程完成。" | tee -a "$BUILD_LOG_PATH"
+
+            else
+                # 没有本地修改，直接拉取
+                git pull origin "$FW_BRANCH" || echo "警告: Git pull 失败，但继续。" | tee -a "$BUILD_LOG_PATH"
+            fi
+            
         ) || return 1
     else
-        echo "正在进行 **全量克隆 (git clone)**..."
-        git clone "$REPO" -b "$FW_BRANCH" "$CURRENT_SOURCE_DIR" || (echo "错误: Git 克隆失败。" >> "$BUILD_LOG_PATH" && return 1)
+        echo "正在进行 **全量克隆 (git clone)**..." | tee -a "$BUILD_LOG_PATH"
+        git clone "$REPO" -b "$FW_BRANCH" "$CURRENT_SOURCE_DIR" || (echo "错误: Git 克隆失败。" | tee -a "$BUILD_LOG_PATH" && return 1)
     fi
     
     if [ ! -f "$CURRENT_SOURCE_DIR/Makefile" ]; then
-        echo "🚨 严重错误: 源码目录无效 (缺少 Makefile)。"
+        echo "🚨 严重错误: 源码目录无效 (缺少 Makefile)。" | tee -a "$BUILD_LOG_PATH"
         return 1
     fi
-    echo "✅ 源码准备就绪。"
+    echo "✅ 源码准备就绪。" | tee -a "$BUILD_LOG_PATH"
     
     export CURRENT_SOURCE_DIR
     return 0
