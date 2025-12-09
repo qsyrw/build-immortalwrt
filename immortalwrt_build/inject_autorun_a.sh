@@ -9,9 +9,9 @@ set -euo pipefail
 #    您将使用 sed 命令来修改这些值。
 # ==========================================================
 # 占位符 IP (必须是唯一的，用于 sed 查找)
-TARGET_IP="192.168.99.99" 
-TARGET_SSID="OpenWrt_Default_SSID"
-TARGET_KEY="OpenWrt_Default_Key"
+TARGET_IP="10.0.11.1" 
+TARGET_SSID="immortalwrt"
+TARGET_KEY="12345678"
 RADIO0_CHANNEL="auto"       # 2.4G 信道
 RADIO0_HTMODE="HT40"        # 2.4G 带宽模式 (HT20/HT40)
 RADIO1_CHANNEL="auto"       # 5G 信道
