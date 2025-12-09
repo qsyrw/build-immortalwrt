@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ==========================================================
-# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.33 (最终精简版)
-# - 优化: 彻底移除 Turboacc 的内置逻辑和所有硬编码的 NAT/Kconfig 冲突处理。
-# - 优化: run_custom_injections 阶段 850 注入点被独立恢复，确保自定义脚本能进行配置清理。
+# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.34 (最终精简优化版)
+# - 优化: 彻底移除所有硬编码的插件逻辑和冲突处理。
+# - 增强: run_custom_injections 模块具备独立日志和精确错误捕获。
 # ==========================================================
 
 # --- 变量定义 ---
@@ -21,11 +21,11 @@ USER_CONFIG_DIR="$BUILD_ROOT/user_configs"  # 存放用户自定义的 .config �
 EXTRA_SCRIPT_DIR="$BUILD_ROOT/custom_scripts" # 存放自定义注入的本地脚本
 OUTPUT_DIR="$BUILD_ROOT/output"             # 存放最终固件的输出目录
 
-# 编译日志文件名格式和时间戳
+# 编译日志文件名格式和时间戳 (全局声明，供子函数使用)
 BUILD_LOG_PATH=""
-BUILD_TIME_STAMP=$(date +%Y%m%d_%H%M)
+BUILD_TIME_STAMP=$(date +%Y%m%d_%H%M) # 精度到分钟
 
-# 配置文件变量列表 (已移除 ENABLE_TURBOACC)
+# 配置文件变量列表 (精简后)
 CONFIG_VAR_NAMES=(FW_TYPE FW_BRANCH CONFIG_FILE_NAME EXTRA_PLUGINS CUSTOM_INJECTIONS ENABLE_QMODEM)
 
 # 动态变量
@@ -38,7 +38,6 @@ CURRENT_SOURCE_DIR=""
 check_and_install_dependencies() {
     echo "## 检查并安装编译依赖..."
     
-    # 核心依赖列表，用于最终安装提示
     local INSTALL_DEPENDENCIES="ack antlr3 asciidoc autoconf automake autopoint bison build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man intltool libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libmpc-dev libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply python3-pyelftools qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd uuid-runtime zip procps util-linux"
     
     if command -v ccache &> /dev/null; then
@@ -49,18 +48,14 @@ check_and_install_dependencies() {
     fi
 
     local missing_deps=""
-    
-    # 🌟 优化点：明确指定需要通过 command -v 检测的工具
     local CHECKABLE_TOOLS="git make gcc g++ gawk python3 perl wget curl unzip procps lscpu free"
     
-    # 循环检测可执行工具
     for dep in $CHECKABLE_TOOLS; do
         if ! command -v "$dep" &> /dev/null; then
             missing_deps="$missing_deps $dep"
         fi
     done
 
-    # 特殊处理：如果核心工具缺失
     if [ -n "$missing_deps" ]; then
         echo "❌ 警告: 缺少关键工具: $missing_deps。"
         echo "尝试安装所有依赖以解决潜在的库文件缺失问题..."
@@ -68,11 +63,9 @@ check_and_install_dependencies() {
         echo "✅ 核心工具校验通过。"
     fi
     
-    # 脚本主体：安装依赖
-    if command -v apt-get &> /dev/null; then
+    if command -v apt-get &> ccache /dev/null; then
         echo -e "\n--- 正在更新软件包列表并安装依赖 (Debian/Ubuntu) ---"
         sudo apt-get update || { echo "错误: apt-get update 失败。请检查网络。"; return 1; }
-        # 运行这一步保证库文件和元包的完整性
         sudo apt-get install -y $INSTALL_DEPENDENCIES
         if [ $? -ne 0 ]; then
              echo "❌ 错误: 依赖安装失败。请手动检查并安装。"
@@ -80,7 +73,6 @@ check_and_install_dependencies() {
         fi
     elif command -v yum &> /dev/null; then
         echo -e "\n--- 正在尝试安装依赖 (CentOS/RHEL) ---"
-        # yum 不支持 -y 的软件包列表
         echo "请手动检查并安装以下依赖：$INSTALL_DEPENDENCIES"
     else
         echo -e "\n**警告:** 无法自动安装依赖。请确保以下软件包已安装:\n$INSTALL_DEPENDENCIES"
@@ -109,7 +101,7 @@ main_menu() {
     while true; do
         clear
         echo "====================================================="
-        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.33 🔥"
+        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.34 🔥"
         echo "             (纯 .config 配置模式)"
         echo "====================================================="
         echo "1) 🌟 新建机型配置 (Create New Configuration)"
@@ -258,7 +250,7 @@ config_interaction() {
         echo "4. ⚙️ **脚本注入管理** (管理): $injection_count 条"
         
         echo "5. [${config_vars[ENABLE_QMODEM]^^}] 内置 Qmodem"
-        echo -e "\n6. ⚠️ **检查配置文件的位置和名称**" # 序号已修改
+        echo -e "\n6. ⚠️ **检查配置文件的位置和名称**" 
 
         echo "-----------------------------------------------------"
         echo "S) 保存配置并返回 | R) 放弃修改并返回"
@@ -367,7 +359,7 @@ validate_build_config() {
     fi
     
     if [[ -n "${VARS[CUSTOM_INJECTIONS]}" ]]; then
-        local injections_array_string=$(echo "$INJECTIONS_STRING" | tr '##' '\n')
+        local injections_array_string=$(echo "${VARS[CUSTOM_INJECTIONS]}" | tr '##' '\n')
         local injections
         IFS=$'\n' read -rd '' -a injections <<< "$injections_array_string"
         
@@ -595,18 +587,19 @@ start_batch_build() {
     read -p "按任意键返回..."
 }
 
-# 4.3 实际执行编译 (V4.9.33 最终精简版)
+# 4.3 实际执行编译 (V4.9.34 最终精简版)
 execute_build() {
     local CONFIG_NAME="$1"
     local FW_TYPE="$2"
     local FW_BRANCH="$3"
     local -n VARS=$4 
     
+    # 局部变量定义
     local BUILD_TIME_STAMP_FULL=$(date +%Y%m%d_%H%M%S)
     BUILD_LOG_PATH="$LOG_DIR/immortalwrt_build_${CONFIG_NAME}_${BUILD_TIME_STAMP_FULL}.log"
 
-    echo -e "\n================== 编译开始 =================="
-    echo "日志文件: $BUILD_LOG_PATH"
+    echo -e "\n================== 编译开始 ==================" | tee -a "$BUILD_LOG_PATH"
+    echo "日志文件: $BUILD_LOG_PATH" | tee -a "$BUILD_LOG_PATH"
     
     local TARGET_DIR_NAME="${FW_TYPE}"
     if [ "$FW_TYPE" == "lede" ]; then TARGET_DIR_NAME="lede"; fi
@@ -616,17 +609,17 @@ execute_build() {
     if [ -d "$CURRENT_SOURCE_DIR_LOCAL" ]; then
         if [[ -z "${IS_BATCH_BUILD+x}" ]]; then
             while true; do
-                echo -e "\n--- 1.5 编译前清理/重置 ---"
-                echo "检测到现有源码目录: $CURRENT_SOURCE_DIR_LOCAL"
+                echo -e "\n--- 1.5 编译前清理/重置 ---" | tee -a "$BUILD_LOG_PATH"
+                echo "检测到现有源码目录: $CURRENT_SOURCE_DIR_LOCAL" | tee -a "$BUILD_LOG_PATH"
                 read -p "是否删除该目录，以进行全新拉取 (y/n, 默认为 n)? " should_delete
                 
                 if [[ "$should_delete" =~ ^[Yy]$ ]]; then
-                    echo "正在删除源码目录..."
+                    echo "正在删除源码目录..." | tee -a "$BUILD_LOG_PATH"
                     rm -rf "$CURRENT_SOURCE_DIR_LOCAL"
-                    echo "✅ 删除完成。"
+                    echo "✅ 删除完成。" | tee -a "$BUILD_LOG_PATH"
                     break
                 elif [[ "$should_delete" =~ ^[Nn]$ ]] || [[ -z "$should_delete" ]]; then
-                    echo "跳过删除，将对现有源码进行 Git Pull 更新。"
+                    echo "跳过删除，将对现有源码进行 Git Pull 更新。" | tee -a "$BUILD_LOG_PATH"
                     break
                 else
                     echo "无效输入。"
@@ -637,7 +630,7 @@ execute_build() {
     
     # --- 2. 源码拉取/更新 ---
     if ! clone_or_update_source "$FW_TYPE" "$FW_BRANCH"; then
-        echo "错误: 源码拉取/更新失败。" >> "$BUILD_LOG_PATH"
+        echo "错误: 源码拉取/更新失败。" | tee -a "$BUILD_LOG_PATH"
         error_handler 1
         return 1
     fi
@@ -648,7 +641,6 @@ execute_build() {
     # 🔥 核心修正：所有编译相关操作都在这个唯一的子 Shell 内完成
     (
         local CURRENT_SOURCE_DIR="$CURRENT_SOURCE_DIR_LOCAL"
-        # 强制切换到源码目录，确保后续所有相对路径操作的正确性
         if ! cd "$CURRENT_SOURCE_DIR"; then echo "错误: 无法进入源码目录。"; exit 1; fi
 
         # 彻底的环境隔离，防止外部的 Shell 变量污染 toplevel.mk
@@ -660,18 +652,18 @@ execute_build() {
         
         # --- 2.5 编译前源码清理 (内嵌并强制在子Shell内执行) ---
         while true; do
-            echo -e "\n## 🛡️ 源码清理模式选择 (在当前目录: $PWD)"
-            echo "-----------------------------------------------------"
-            echo "1) 🧹 **标准清理 (make clean)**"
-            echo "2) 彻底清理 (make dirclean)"
-            echo "3) 🔄 跳过清理"
-            echo "-----------------------------------------------------"
+            echo -e "\n## 🛡️ 源码清理模式选择 (在当前目录: $PWD)" | tee -a "$BUILD_LOG_PATH"
+            echo "-----------------------------------------------------" | tee -a "$BUILD_LOG_PATH"
+            echo "1) 🧹 **标准清理 (make clean)**" | tee -a "$BUILD_LOG_PATH"
+            echo "2) 彻底清理 (make dirclean)" | tee -a "$BUILD_LOG_PATH"
+            echo "3) 🔄 跳过清理" | tee -a "$BUILD_LOG_PATH"
+            echo "-----------------------------------------------------" | tee -a "$BUILD_LOG_PATH"
             read -p "请选择清理模式 (1/2/3): " clean_choice
             
             case $clean_choice in
-                1) make clean || { echo "❌ 错误: make clean 失败。"; exit 1; }; echo "✅ 标准清理完成。"; break ;;
-                2) make dirclean || { echo "❌ 错误: make dirclean 失败。"; exit 1; }; echo "✅ 彻底清理完成。"; break ;;
-                3) echo "--- 跳过清理 ---"; break ;;
+                1) make clean || { echo "❌ 错误: make clean 失败。"; exit 1; }; echo "✅ 标准清理完成。" | tee -a "$BUILD_LOG_PATH"; break ;;
+                2) make dirclean || { echo "❌ 错误: make dirclean 失败。"; exit 1; }; echo "✅ 彻底清理完成。" | tee -a "$BUILD_LOG_PATH"; break ;;
+                3) echo "--- 跳过清理 ---" | tee -a "$BUILD_LOG_PATH"; break ;;
                 *) echo "无效选择。请重新输入。"; sleep 1 ;;
             esac
         done
@@ -680,17 +672,17 @@ execute_build() {
         run_custom_injections "${VARS[CUSTOM_INJECTIONS]}" "100" "$CURRENT_SOURCE_DIR"
         
         if [[ "${VARS[ENABLE_QMODEM]}" == "y" ]]; then
-            echo -e "\n--- 配置 QModem feed ---"
+            echo -e "\n--- 配置 QModem feed ---" | tee -a "$BUILD_LOG_PATH"
             if ! grep -q "qmodem" feeds.conf.default; then
                 echo 'src-git qmodem https://github.com/FUjr/QModem.git;main' >> feeds.conf.default
             fi
         fi
         
-        echo -e "\n--- 更新 feeds ---"
-        chmod +x ./scripts/feeds 2>/dev/null # 强制授权
+        echo -e "\n--- 更新 feeds ---" | tee -a "$BUILD_LOG_PATH"
+        chmod +x ./scripts/feeds 2>/dev/null 
         ./scripts/feeds update -a && ./scripts/feeds install -a || { echo "❌ 错误: feeds 更新/安装失败。"; exit 1; }
         
-        echo -e "\n--- 拉取额外插件 ---"
+        echo -e "\n--- 拉取额外插件 ---" | tee -a "$BUILD_LOG_PATH"
         local plugin_string="${VARS[EXTRA_PLUGINS]}"
         local plugins_array_string=$(echo "$plugin_string" | tr '##' '\n')
         local plugins
@@ -703,10 +695,10 @@ execute_build() {
                 repo_url="${BASH_REMATCH[1]}"
                 target_path="${BASH_REMATCH[2]}"
                 if [ -d "$target_path" ]; then
-                    (cd "$target_path" && git pull) || echo "警告: 插件 $target_path git pull 失败，但继续。"
+                    (cd "$target_path" && git pull) || echo "警告: 插件 $target_path git pull 失败，但继续。" | tee -a "$BUILD_LOG_PATH"
                 else
                     $plugin_cmd || { echo "❌ 错误: 插件 $target_path 克隆失败。"; exit 1; }
-                }
+                fi
             else
                 eval "$plugin_cmd" || { echo "❌ 错误: 插件命令执行失败。"; exit 1; }
             fi
@@ -715,51 +707,52 @@ execute_build() {
         # ----------------------------------------------------------------
         # 配置文件导入逻辑
         # ----------------------------------------------------------------
-        echo -e "\n--- 导入用户配置 ---"
+        echo -e "\n--- 导入用户配置 ---" | tee -a "$BUILD_LOG_PATH"
         local config_file_name="${VARS[CONFIG_FILE_NAME]}"
         local source_config_path="$USER_CONFIG_DIR/$config_file_name"
         local CONFIG_FILE_EXTENSION="${config_file_name##*.}"
         
         if [ ! -f "$source_config_path" ]; then
-            echo "❌ 致命错误：用户配置文件不存在！路径：$source_config_path"
+            echo "❌ 致命错误：用户配置文件不存在！路径：$source_config_path" | tee -a "$BUILD_LOG_PATH"
             exit 1
         fi
 
         if [[ "$CONFIG_FILE_EXTENSION" == "diffconfig" ]]; then
-            echo "正在复制 $config_file_name 到 defconfig..."
+            echo "正在复制 $config_file_name 到 defconfig..." | tee -a "$BUILD_LOG_PATH"
             cp "$source_config_path" "defconfig" || { echo "❌ 错误: 复制 defconfig 失败。"; exit 1; }
-            echo "正在执行 make defconfig 以扩展 diffconfig 配置..."
+            echo "正在执行 make defconfig 以扩展 diffconfig 配置..." | tee -a "$BUILD_LOG_PATH"
             make defconfig || { echo "❌ 错误: make defconfig 失败。"; exit 1; }
         else
-            echo "正在复制 $config_file_name 到 .config..."
+            echo "正在复制 $config_file_name 到 .config..." | tee -a "$BUILD_LOG_PATH"
             cp "$source_config_path" ".config" || { echo "❌ 错误: 复制 .config 失败。"; exit 1; }
-            echo "正在执行 make defconfig 以确认配置..."
+            echo "正在执行 make defconfig 以确认配置..." | tee -a "$BUILD_LOG_PATH"
             make defconfig || { echo "❌ 错误: make defconfig 失败。"; exit 1; }
         fi
         
         if [ ! -f .config ]; then
-            echo "❌ 致命错误：导入配置后 .config 文件未生成！"
+            echo "❌ 致命错误：导入配置后 .config 文件未生成！" | tee -a "$BUILD_LOG_PATH"
             exit 1
         fi
         # ----------------------------------------------------------------
 
         # --- 4. 运行配置后自定义注入 (阶段 850) ---
-        # 🚨 注意：所有配置清理和修改 .config 的逻辑都应在此阶段的注入脚本中执行。
+        # 此阶段用于所有配置清理、补丁和修改 .config 的逻辑
         run_custom_injections "${VARS[CUSTOM_INJECTIONS]}" "850" "$CURRENT_SOURCE_DIR"
         
-        echo -e "\n--- 开始编译 (线程: $JOBS_N) ---"
-        echo "最终运行 make defconfig 确保所有依赖正确..."
+        echo -e "\n--- 开始编译 (线程: $JOBS_N) ---" | tee -a "$BUILD_LOG_PATH"
+        echo "最终运行 make defconfig 确保所有依赖正确..." | tee -a "$BUILD_LOG_PATH"
         make defconfig || { echo "❌ 错误: 最终 make defconfig 失败。"; exit 1; }
         
         local CCACHE_SETTINGS=""
         
+        # 核心编译步骤，使用 tee 保持日志输出和文件记录
         make -j"$JOBS_N" V=s $CCACHE_SETTINGS 2>&1 | tee "$BUILD_LOG_PATH"
         
         if [ ${PIPESTATUS[0]} -ne 0 ]; then
-            echo -e "\n================== 编译失败 ❌ =================="
+            echo -e "\n================== 编译失败 ❌ ==================" | tee -a "$BUILD_LOG_PATH"
             exit 1
         else
-            echo -e "\n================== 编译成功 ✅ =================="
+            echo -e "\n================== 编译成功 ✅ ==================" | tee -a "$BUILD_LOG_PATH"
             archive_firmware_and_logs "$CONFIG_NAME" "$FW_TYPE" "$FW_BRANCH" "$BUILD_TIME_STAMP_FULL" "$GIT_COMMIT_ID" "$BUILD_LOG_PATH"
             exit 0
         fi
@@ -767,7 +760,11 @@ execute_build() {
     
     local EXECUTE_STATUS=$?
     if [ "$EXECUTE_STATUS" -ne 0 ]; then
-        error_handler
+        error_handler "$EXECUTE_STATUS"
+        return 1
+    fi
+    return 0
+}
 
 # --- 5. 工具 ---
 
@@ -781,7 +778,6 @@ determine_compile_jobs() {
     if [ "$mem_jobs" -lt "$cpu_jobs" ] && [ "$mem_jobs" -gt 0 ]; then
         final_jobs="$mem_jobs"
     fi
-    # 修正后的单行 if 语句
     if [ "$final_jobs" -lt 1 ]; then final_jobs=1; fi
     echo "$final_jobs"
 }
@@ -802,7 +798,7 @@ error_handler() {
         if [[ -z "${IS_BATCH_BUILD+x}" ]]; then
             read -p "按回车返回菜单，或输入 'debug' 进入 Shell: " action
             if [[ "$action" == "debug" ]]; then
-                cd "$CURRENT_SOURCE_DIR" && /bin/bash
+                cd "$CURRENT_SOURCE_DIR_LOCAL" && /bin/bash
             fi
         else
             return 1
@@ -900,7 +896,7 @@ archive_firmware_and_logs() {
     local GIT_COMMIT_ID="$5"
     local BUILD_LOG_PATH="$6"
 
-    echo -e "\n--- 归档固件和日志 ---"
+    echo -e "\n--- 归档固件和日志 ---" | tee -a "$BUILD_LOG_PATH"
     
     local TARGET_DIR_NAME="${FW_TYPE}"
     if [ "$FW_TYPE" == "lede" ]; then TARGET_DIR_NAME="lede"; fi
@@ -925,13 +921,14 @@ archive_firmware_and_logs() {
             zip -r "$FINAL_OUTPUT_ZIP" "$(basename "$target_subdir")" "build.log"
         )
         
-        echo "✅ 固件包已归档到: $FINAL_OUTPUT_ZIP"
+        echo "✅ 固件包已归档到: $FINAL_OUTPUT_ZIP" | tee -a "$BUILD_LOG_PATH"
     else
-        echo "❌ 警告: 找不到固件输出目录 ($FIRMWARE_DIR)。仅保存日志。"
+        echo "❌ 警告: 找不到固件输出目录 ($FIRMWARE_DIR)。仅保存日志。" | tee -a "$BUILD_LOG_PATH"
         cp "$BUILD_LOG_PATH" "$LOG_DIR/${ARCHIVE_NAME}_log_only.log"
     fi
 }
 
+# 6.0 核心模块：运行自定义脚本注入 (V4.9.34 优化)
 run_custom_injections() {
     local INJECTIONS_STRING="$1"
     local TARGET_STAGE="$2"
@@ -941,9 +938,12 @@ run_custom_injections() {
         return
     fi
     
+    # 将输入的 ## 分隔字符串转换为 Bash 数组，并删除空行
     local injections_array_string=$(echo "$INJECTIONS_STRING" | tr '##' '\n')
     local injections
     IFS=$'\n' read -rd '' -a injections <<< "$injections_array_string"
+    
+    echo -e "\n--- ⚙️ 开始自定义脚本注入 [阶段 $TARGET_STAGE] ---" | tee -a "$BUILD_LOG_PATH"
     
     for injection in "${injections[@]}"; do
         if [[ -z "$injection" ]]; then continue; fi
@@ -953,17 +953,37 @@ run_custom_injections() {
         local full_script_path="$EXTRA_SCRIPT_DIR/$script_name"
         
         if [ "$stage" == "$TARGET_STAGE" ] && [ -f "$full_script_path" ]; then
-            echo -e "\n--- ⚙️ 运行脚本注入 [阶段 $stage]: $script_name ---"
+            
+            # --- 🌟 优化：日志分离和状态记录 ---
+            local INJECTION_LOG="$LOG_DIR/${script_name}_${BUILD_TIME_STAMP}_${TARGET_STAGE}.log"
+            echo "--- 正在运行: $script_name (阶段: $stage) ---" | tee -a "$BUILD_LOG_PATH"
+            echo "子脚本日志: $INJECTION_LOG" | tee -a "$BUILD_LOG_PATH"
+            
+            # --- 🌟 优化：在子 Shell 中执行，并重定向输出到子日志 ---
             (
+                # 切换目录，失败则子 Shell 退出
                 cd "$CURRENT_SOURCE_DIR" || exit 1
-                bash "$full_script_path" || { echo "❌ 注入脚本 $script_name 执行失败。"; exit 1; }
+                
+                # 强制 bash 执行，并将 stdout 和 stderr 导入子日志
+                bash "$full_script_path" 2>&1 | tee "$INJECTION_LOG"
             )
-            if [ $? -ne 0 ]; then
-                echo "🚨 致命错误：脚本注入失败，停止编译。"
-                exit 1
+            
+            # PIPESTATUS[0] 捕获子脚本的退出码
+            local INJECTION_STATUS=${PIPESTATUS[0]}
+
+            # --- 🌟 优化：精确的错误捕获 ---
+            if [ "$INJECTION_STATUS" -ne 0 ]; then
+                echo -e "🚨 **脚本注入失败** ($script_name, 阶段 $stage, 退出码: $INJECTION_STATUS)。" | tee -a "$BUILD_LOG_PATH"
+                echo "请检查子日志文件: $INJECTION_LOG" | tee -a "$BUILD_LOG_PATH"
+                
+                # 致命错误，停止主编译流程
+                exit 1 
+            else
+                echo -e "✅ 注入脚本 $script_name 执行成功。" | tee -a "$BUILD_LOG_PATH"
             fi
         fi
     done
+    echo -e "--- 脚本注入 [阶段 $TARGET_STAGE] 完成 ---\n" | tee -a "$BUILD_LOG_PATH"
 }
 
 # --- 脚本入口 ---
