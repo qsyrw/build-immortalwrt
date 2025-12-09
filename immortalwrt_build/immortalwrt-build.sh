@@ -31,13 +31,13 @@ CONFIG_VAR_NAMES=(FW_TYPE FW_BRANCH CONFIG_FILE_NAME EXTRA_PLUGINS CUSTOM_INJECT
 # 动态变量
 CURRENT_SOURCE_DIR=""
 
-
 # --- 核心目录和依赖初始化 ---
 
 # 1.1 检查并安装编译依赖
 check_and_install_dependencies() {
     echo "## 检查并安装编译依赖..."
     
+    # 核心依赖列表，用于最终安装提示
     local INSTALL_DEPENDENCIES="ack antlr3 asciidoc autoconf automake autopoint bison build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man intltool libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libmpc-dev libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply python3-pyelftools qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd uuid-runtime zip procps util-linux"
     
     if command -v ccache &> /dev/null; then
@@ -48,14 +48,18 @@ check_and_install_dependencies() {
     fi
 
     local missing_deps=""
-    local CHECKABLE_TOOLS="git make gcc g++ gawk python3 perl wget curl unzip procps lscpu free"
     
+    # 🌟 优化点：明确指定需要通过 command -v 检测的工具 (已移除 procps)
+    local CHECKABLE_TOOLS="git make gcc g++ gawk python3 perl wget curl unzip lscpu free"
+    
+    # 循环检测可执行工具
     for dep in $CHECKABLE_TOOLS; do
         if ! command -v "$dep" &> /dev/null; then
             missing_deps="$missing_deps $dep"
         fi
     done
 
+    # 特殊处理：如果核心工具缺失
     if [ -n "$missing_deps" ]; then
         echo "❌ 警告: 缺少关键工具: $missing_deps。"
         echo "尝试安装所有依赖以解决潜在的库文件缺失问题..."
@@ -63,9 +67,11 @@ check_and_install_dependencies() {
         echo "✅ 核心工具校验通过。"
     fi
     
-    if command -v apt-get &> ccache /dev/null; then
+    # 脚本主体：安装依赖
+    if command -v apt-get &> /dev/null; then
         echo -e "\n--- 正在更新软件包列表并安装依赖 (Debian/Ubuntu) ---"
         sudo apt-get update || { echo "错误: apt-get update 失败。请检查网络。"; return 1; }
+        # 运行这一步保证库文件和元包的完整性
         sudo apt-get install -y $INSTALL_DEPENDENCIES
         if [ $? -ne 0 ]; then
              echo "❌ 错误: 依赖安装失败。请手动检查并安装。"
@@ -73,6 +79,7 @@ check_and_install_dependencies() {
         fi
     elif command -v yum &> /dev/null; then
         echo -e "\n--- 正在尝试安装依赖 (CentOS/RHEL) ---"
+        # yum 不支持 -y 的软件包列表
         echo "请手动检查并安装以下依赖：$INSTALL_DEPENDENCIES"
     else
         echo -e "\n**警告:** 无法自动安装依赖。请确保以下软件包已安装:\n$INSTALL_DEPENDENCIES"
