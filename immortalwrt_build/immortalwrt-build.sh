@@ -544,7 +544,7 @@ build_queue_menu() {
                         local new_queue=()
                         for item in "${queue[@]}"; do
                             if [ "$item" != "$config_name_to_toggle" ]; then new_queue+=("$item"); fi
-                        end 
+                        done 
                         queue=("${new_queue[@]}")
                         echo "配置已移除。"
                     else
