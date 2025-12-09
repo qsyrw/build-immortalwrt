@@ -1,40 +1,35 @@
 #!/usr/bin/env bash
-# 文件名: inject_autorun_a.sh
+# 文件名: inject_autorun_a.sh (V4.9.34 优化版：无参数，使用硬编码默认值)
 # 功能: 首次启动时，修改 LAN IP，并完整设置无线设备的 SSID/Key/信道/带宽。
-# 用法: bash inject_autorun_a.sh <目标IP> <SSID> <密码> <R0_信道> <R0_带宽模式> <R1_信道> <R1_带宽模式> <源码根目录>
 
 set -euo pipefail
 
-# 1. 参数定义
-TARGET_IP="$1"
-TARGET_SSID="$2"
-TARGET_KEY="$3"
-RADIO0_CHANNEL="$4"
-RADIO0_HTMODE="$5"
-RADIO1_CHANNEL="$6"
-RADIO1_HTMODE="$7"
-SOURCE_ROOT="$8"
+# ==========================================================
+# 🛑 核心定制区：使用硬编码默认值作为占位符
+#    您将使用 sed 命令来修改这些值。
+# ==========================================================
+# 占位符 IP (必须是唯一的，用于 sed 查找)
+TARGET_IP="192.168.99.99" 
+TARGET_SSID="OpenWrt_Default_SSID"
+TARGET_KEY="OpenWrt_Default_Key"
+RADIO0_CHANNEL="auto"       # 2.4G 信道
+RADIO0_HTMODE="HT40"        # 2.4G 带宽模式 (HT20/HT40)
+RADIO1_CHANNEL="auto"       # 5G 信道
+RADIO1_HTMODE="VHT80"       # 5G 带宽模式 (VHT20/VHT40/VHT80/VHT160)
 
-# 1.1. 参数检查
-if [[ -z "$TARGET_IP" || -z "$TARGET_SSID" || -z "$TARGET_KEY" || -z "$RADIO0_CHANNEL" || -z "$RADIO0_HTMODE" || -z "$RADIO1_CHANNEL" || -z "$RADIO1_HTMODE" || -z "$SOURCE_ROOT" ]]; then
-    echo "错误: 缺少参数。用法: bash $0 <IP> <SSID> <Key> <R0_CH> <R0_MODE> <R1_CH> <R1_MODE> <源码根目录>"
-    echo "当前接收到的参数数量: $#"
-    exit 1
-fi
-if [[ ! -d "$SOURCE_ROOT" ]]; then
-    echo "错误: 源码目录 [$SOURCE_ROOT] 不存在。"
-    exit 1
-fi
+# ==========================================================
+# 🛑 注意：在 run_custom_injections 中，脚本是在源码根目录执行的
+SOURCE_ROOT="$PWD" 
 
-log(){ printf "[%s][AUTORUN-A-V3] %s\n" "$(date '+%T')" "$*"; }
+log(){ printf "[%s][AUTORUN-A-V4] %s\n" "$(date '+%T')" "$*"; }
 
 # 目标文件路径 (在源码树的 files/etc/rc.local)
 RC_LOCAL_FILE="$SOURCE_ROOT/files/etc/rc.local"
 CONFIG_DIR=$(dirname "$RC_LOCAL_FILE")
 
-log "目标 IP: $TARGET_IP, SSID: $TARGET_SSID"
+log "使用配置 -> IP: $TARGET_IP, SSID: $TARGET_SSID"
 
-# 2. 准备 Overlay 目录
+# 1. 准备 Overlay 目录
 mkdir -p "$CONFIG_DIR"
 if [ ! -f "$RC_LOCAL_FILE" ]; then
     log "rc.local 文件不存在，创建并赋予执行权限。"
@@ -42,8 +37,7 @@ if [ ! -f "$RC_LOCAL_FILE" ]; then
     chmod +x "$RC_LOCAL_FILE"
 fi
 
-# 3. 注入脚本内容 (核心逻辑)
-# 注入 UCI 命令块，使用 sed 进行自我清理。
+# 2. 注入脚本内容 (核心逻辑)
 SCRIPT_CONTENT=$(cat << EOF_SCRIPT
 # === BEGIN_AUTORUN_A: $TARGET_IP,$TARGET_SSID ===
 # 首次启动时修改 LAN IP，并设置无线 SSID/Key/信道/带宽。
@@ -78,7 +72,7 @@ fi
 EOF_SCRIPT
 )
 
-# 4. 执行注入
+# 3. 执行注入
 log "正在向 $RC_LOCAL_FILE 中注入自启脚本A (IP & 完整 WiFi 配置)..."
 
 # 1. 删除原有的 exit 0
