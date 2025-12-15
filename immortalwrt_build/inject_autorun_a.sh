@@ -8,7 +8,7 @@ set -euo pipefail
 # --- 1. 脚本设置 (请确认这里是您想要的配置) ---
 TARGET_IP="10.0.11.1" 
 TARGET_SSID="ImmortalWrt-Custom"
-TARGET_KEY="custompassword" 
+TARGET_KEY="12345678" 
 TARGET_COUNTRY="CN"         # 必须设置国家代码
 
 RADIO0_CHANNEL="auto"       
