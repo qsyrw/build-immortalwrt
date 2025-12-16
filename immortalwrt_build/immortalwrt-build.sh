@@ -1031,4 +1031,3 @@ run_custom_injections() {
 # --- 脚本入口 ---
 check_and_install_dependencies
 main_menu
-}
