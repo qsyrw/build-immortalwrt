@@ -376,8 +376,7 @@ validate_build_config() {
         IFS=$'\n' read -rd '' -a injections <<< "$injections_array_string"
         
         for injection in "${injections[@]}"; do
-            # 🌟 修正点：将 'end' 改为正确的 'fi'
-            if [[ -z "$injection" ]]; then continue; fi 
+            if [[ -z "$injection" ]]; then continue; fi  # <--- 关键修正点！
             local script_path_url=$(echo "$injection" | awk '{print $1}')
             local full_script_path="$EXTRA_SCRIPT_DIR/$script_path_url"
             
