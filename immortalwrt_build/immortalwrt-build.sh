@@ -1,12 +1,9 @@
 #!/bin/bash
 
 # ==========================================================
-# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.35 (最终稳定版)
-# - 优化: run_custom_injections 模块具备独立日志和精确错误捕获。
-# - 修正: 增强 manage_injections_menu，支持自动转换 GitHub 网页链接为 Raw 链接。
-# - 修正: 修复依赖检查中对 procps 的误判。
-# - 新增: execute_build 流程中嵌入 make download 步骤。
-# - 修正: 修复 manage_injections_menu 和 manage_plugins_menu 中的循环语法错误 (导致 973 行错误)。
+# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.36 (最终稳定版)
+# - 修正: 修复 manage_plugins_menu 和 manage_injections_menu 中的循环语法错误 (已解决)。
+# - 修正: 修复 run_custom_injections 中的 'endif' 拼写错误 (已解决此版本中的行 1077 错误)。
 # ==========================================================
 
 # --- 变量定义 ---
@@ -111,7 +108,7 @@ main_menu() {
     while true; do
         clear
         echo "====================================================="
-        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.35 🔥"
+        echo "        🔥 ImmortalWrt 固件编译管理脚本 V4.9.36 🔥"
         echo "             (纯 .config 配置模式)"
         echo "====================================================="
         echo "1) 🌟 新建机型配置 (Create New Configuration)"
@@ -643,7 +640,7 @@ start_batch_build() {
     read -p "按任意键返回..."
 }
 
-# 4.3 实际执行编译 (V4.9.35 最终精简版)
+# 4.3 实际执行编译 (V4.9.36 最终精简版)
 execute_build() {
     local CONFIG_NAME="$1"
     local FW_TYPE="$2"
@@ -905,7 +902,7 @@ manage_plugins_menu() {
                     local new_str=""; local first=true
                     for item in "${plugins_array[@]}"; do
                         if $first; then new_str="$item"; first=false; else new_str="${new_str}##${item}"; fi
-                    done # <--- 修正：这里是 'done'
+                    done 
                     vars_array[EXTRA_PLUGINS]="$new_str"
                 fi ;;
             R|r) return ;;
@@ -972,7 +969,7 @@ manage_injections_menu() {
                     local new_str=""; local first=true
                     for item in "${inj_array[@]}"; do
                         if $first; then new_str="$item"; first=false; else new_str="${new_str}##${item}"; fi
-                    done # <--- 修正：这里是 'done'
+                    done 
                     vars_array[CUSTOM_INJECTIONS]="$new_str"
                 fi ;;
             R|r) return ;;
@@ -1020,7 +1017,7 @@ archive_firmware_and_logs() {
     fi
 }
 
-# 6.0 核心模块：运行自定义脚本注入 (V4.9.35 优化)
+# 6.0 核心模块：运行自定义脚本注入 (V4.9.36 最终修正)
 run_custom_injections() {
     local INJECTIONS_STRING="$1"
     local TARGET_STAGE="$2"
@@ -1038,7 +1035,7 @@ run_custom_injections() {
     echo -e "\n--- ⚙️ 开始自定义脚本注入 [阶段 $TARGET_STAGE] ---" | tee -a "$BUILD_LOG_PATH"
     
     for injection in "${injections[@]}"; do
-        if [[ -z "$injection" ]]; then continue; endif
+        if [[ -z "$injection" ]]; then continue; fi # <--- 修正点：将 'endif' 改回 'fi'
         
         local script_name=$(echo "$injection" | awk '{print $1}')
         local stage=$(echo "$injection" | awk '{print $2}')
