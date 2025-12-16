@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ==========================================================
-# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V6.2.6
+# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V6.2.7
 # ----------------------------------------------------------
-# (健壮性增强 | 智能诊断 | 实时进度监控 | 增强安全和清理)
+# (全面增强：更智能的诊断、更健壮的流程、CCACHE 持久化管理)
 # ==========================================================
 
 # --- 1. 颜色定义与基础变量 ---
@@ -14,7 +14,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # --- 版本控制和兼容性检查 ---
-SCRIPT_VERSION="6.2.6"
+SCRIPT_VERSION="6.2.7"
 MIN_BASH_VERSION=4
 
 # 核心构建根目录
@@ -33,7 +33,7 @@ BACKUP_DIR="$BUILD_ROOT/backup"
 # 全局变量
 declare -g BUILD_LOG_PATH=""
 declare -g CURRENT_SOURCE_DIR=""
-declare -g CCACHE_LIMIT="50G" 
+declare -g CCACHE_LIMIT="50G" # 初始默认值，将被实际设置覆盖
 declare -g JOBS_N=1
 declare -g TOTAL_MEM_KB=0
 
@@ -66,7 +66,7 @@ detect_system() {
 show_system_info() {
     echo -e "${BLUE}系统信息: ${NC}"
     echo -e "  系统: $(detect_system)"
-    echo -e "  CPU: $(nproc) 核心"
+    echo -e "  CPU: $(nproc 2>/dev/null || echo 1) 核心"
     
     local mem_info=$(free -h 2>/dev/null | awk '/^Mem:/ {print $2}' || echo "N/A")
     echo -e "  内存: $mem_info"
@@ -90,17 +90,18 @@ monitor_progress_bar() {
     local start_time=$(date +%s)
     
     local pipe_file="/tmp/progress_monitor_$$.pipe"
-    mkfifo "$pipe_file" 2>/dev/null
+    if ! mkfifo "$pipe_file"; then
+        echo -e "${RED}❌ 无法创建进度管道文件，跳过实时监控。${NC}"
+        return
+    fi
     
     tail -f "$log_file" 2>/dev/null > "$pipe_file" &
     local tail_pid=$!
     
-    # 设置超时，避免无限等待
     local timeout=3600  # 1小时超时
     local start_monitor=$(date +%s)
     
     while IFS= read -r -t 60 line; do
-        # 检查是否超时
         if (( $(date +%s) - start_monitor > timeout )); then
             echo -e "\n${YELLOW}⚠️  进度监控超时${NC}"
             break
@@ -139,7 +140,6 @@ monitor_progress_bar() {
             fi
         fi
         
-        # 检测编译结束
         if echo "$line" | grep -q "make\[.*\]: Leaving directory.*\.\./\.\."; then
             break
         fi
@@ -211,6 +211,12 @@ set_resource_limits() {
     
     local max_procs=$((JOBS_N * 2 + 50))
     ulimit -u "$max_procs" 2>/dev/null || true
+
+    # 读取 CCACHE 实际限制 (持久化改进)
+    if command -v ccache &> /dev/null; then
+        local current_limit=$(ccache -s 2>/dev/null | grep -E "cache size \(maximum\)" | grep -oE "[0-9.]+ [A-Z]B" || echo "50G")
+        CCACHE_LIMIT="$current_limit"
+    fi
 }
 
 # 生成编译摘要报告
@@ -472,6 +478,7 @@ validate_build_config() {
             warning_count=$((warning_count + 1))
         fi
         
+        # 安全性检查：检测可疑命令
         if grep -q "eval.*base64_decode\|wget.*http://.*sh\|curl.*http://.*sh" "$config_path" 2>/dev/null; then
             echo -e "${RED}⚠️  错误：配置文件中检测到可疑命令！${NC}"
             error_count=$((error_count + 1))
@@ -741,7 +748,6 @@ execute_build() {
         local download_phase_jobs=$((JOBS_N > 8 ? 8 : JOBS_N))
         echo -e "\n--- ${BLUE}🌐 下载依赖包 (make download -j$download_phase_jobs)${NC} ---" | tee -a "$BUILD_LOG_PATH"
         
-        # 修复的关键行：移除多余的花括号
         make download -j"$download_phase_jobs" V=s 2>&1 | tee -a "$BUILD_LOG_PATH"
         if [ ${PIPESTATUS[0]} -ne 0 ]; then 
             echo -e "${RED}❌ 下载失败${NC}" | tee -a "$BUILD_LOG_PATH"
@@ -750,10 +756,11 @@ execute_build() {
         
         echo -e "\n--- ${BLUE}🚀 开始编译 (make -j$JOBS_N)${NC} ---" | tee -a "$BUILD_LOG_PATH"
         
-        # 目标计数
-        local total_targets=$(make -n V=s 2>/dev/null | grep -c "^Building target \|^make\[.*\]: Entering directory.*package/" || echo 0)
+        # 目标计数 (健壮性改进)
+        local total_targets=$(make -n V=s 2>&1 | grep -E "make\[[0-9]+\]: Entering directory.*package" | wc -l 2>/dev/null || echo 0)
         if [ "$total_targets" -eq 0 ]; then 
-             total_targets=$(find package -name Makefile 2>/dev/null | wc -l) 
+             echo -e "${YELLOW}⚠️  警告：无法精确统计目标，使用保守估计...${NC}" | tee -a "$BUILD_LOG_PATH"
+             total_targets=$(find package -name Makefile -type f 2>/dev/null | wc -l || echo 50) 
         fi
         
         local PROGRESS_PID=0
@@ -766,6 +773,7 @@ execute_build() {
         MAKE_RET=$?
         
         if [ "$PROGRESS_PID" -ne 0 ]; then 
+            # 使用双引号增强 kill 和 wait 的健壮性
             kill "$PROGRESS_PID" 2>/dev/null
             wait "$PROGRESS_PID" 2>/dev/null
         fi
@@ -811,6 +819,9 @@ manage_compile_cache() {
             echo -e "${RED}❌ CCACHE未安装，跳过缓存管理${NC}"; read -p "按回车返回..."; return
         fi
 
+        # 确保 CCACHE_LIMIT 反映最新状态
+        set_resource_limits > /dev/null 
+
         local ccache_stats=$(ccache -s 2>/dev/null)
         local hit_rate=$(echo "$ccache_stats" | grep -E "cache hit \(rate\)" | grep -oE "[0-9]+\.[0-9]+%" || echo "0%")
         local cache_size=$(echo "$ccache_stats" | grep -E "cache size" | head -1 | grep -oE "[0-9]+\.[0-9]+ [A-Z]B" || echo "0.0 GB")
@@ -845,7 +856,8 @@ manage_compile_cache() {
             3)
                 read -p "输入新的大小 (如 100G, 200G): " new_size
                 if [[ -n "$new_size" ]]; then
-                    ccache -M "$new_size"
+                    # 实际设置 CCACHE 限制并更新全局变量 (持久化改进)
+                    ccache -M "$new_size" 
                     CCACHE_LIMIT="$new_size"
                     echo -e "${GREEN}✅ 缓存大小已调整为 $new_size${NC}"
                 fi
@@ -1032,14 +1044,19 @@ EOF
     echo -e "${YELLOW}请创建或导入您的 OpenWrt .config 文件到: ${user_cfg_path}${NC}"
     echo -e "${GREEN}✅ 配置 '$name' 已创建。${NC}"; sleep 1
     
-    if command -v nano &> /dev/null; then
-        read -p "是否立即使用 nano 编辑 .config 文件? (y/n): " edit_choice
-        if [[ "$edit_choice" =~ ^[Yy]$ ]]; then
+    read -p "是否立即使用 nano 编辑 .config 文件? (y/n): " edit_choice
+    if [[ "$edit_choice" =~ ^[Yy]$ ]]; then
+        if command -v nano &> /dev/null; then
             touch "$user_cfg_path"
             nano "$user_cfg_path"
             generate_config_signature "$user_cfg_path"
+        else
+            echo -e "${RED}❌ 未找到 nano，请手动编辑。${NC}"
         fi
+    else
+        echo -e "${YELLOW}请记得使用 make menuconfig 或手动编辑 $user_cfg_path 来初始化配置！${NC}"
     fi
+
     read -p "按回车返回..."
 }
 
@@ -1288,6 +1305,7 @@ cleanup_on_exit() {
     # 查找并删除临时管道文件
     rm -f /tmp/progress_monitor_*.pipe 2>/dev/null
     rm -f /tmp/*_artifacts_* 2>/dev/null
+    rm -rf /tmp/immortalwrt_import_* 2>/dev/null
     
     # 重置ulimit
     ulimit -t unlimited 2>/dev/null || true
@@ -1306,6 +1324,8 @@ cleanup_on_exit() {
 trap cleanup_on_exit EXIT INT TERM
 
 # --- 脚本入口 ---
+# 必须先调用 set_resource_limits 来初始化 CCACHE_LIMIT
+set_resource_limits
 check_bash_version
 check_and_install_dependencies
 main_menu
