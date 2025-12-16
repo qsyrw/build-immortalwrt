@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ==========================================================
-# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V6.2.1
+# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V6.2.2
 # ----------------------------------------------------------
-# (核心功能恢复与优化版)
+# (健壮性与准确性增强版)
 # ==========================================================
 
 # --- 1. 颜色定义与基础变量 ---
@@ -32,9 +32,9 @@ CONFIG_VAR_NAMES=(FW_TYPE REPO_URL FW_BRANCH CONFIG_FILE_NAME EXTRA_PLUGINS CUST
 declare -g CURRENT_SOURCE_DIR=""
 declare -g CCACHE_LIMIT="50G" 
 
-# --- 2. 核心辅助函数 (缺失函数恢复) ---
+# --- 2. 核心辅助函数 ---
 
-# 辅助函数：获取配置文件摘要
+# 辅助函数：获取配置文件摘要 (不变)
 get_config_summary() {
     local config_file_name="$1"
     local config_path="$USER_CONFIG_DIR/$config_file_name"
@@ -57,7 +57,7 @@ get_config_summary() {
     fi
 }
 
-# 辅助函数：保存配置
+# 辅助函数：保存配置 (不变)
 save_config_from_array() {
     local config_name="$1"
     local -n vars_array="$2"
@@ -75,7 +75,7 @@ save_config_from_array() {
     return 0
 }
 
-# 辅助函数：删除配置
+# 辅助函数：删除配置 (不变)
 delete_config() {
     local config_name="$1"
     local config_file="$CONFIGS_DIR/$config_name.conf"
@@ -95,9 +95,9 @@ delete_config() {
 }
 
 
-# --- 3. 初始化与依赖 ---
+# --- 3. 初始化与依赖 (不变) ---
 
-# 检查并安装编译依赖 (日志轮转优化)
+# 检查并安装编译依赖 (不变)
 check_and_install_dependencies() {
     local CHECKABLE_TOOLS="git make gcc g++ gawk python3 perl wget curl unzip lscpu free ccache"
     local missing_deps=""
@@ -132,7 +132,7 @@ check_and_install_dependencies() {
     return 0
 }
 
-# CCACHE 状态报告
+# CCACHE 状态报告 (不变)
 ccache_status() {
     clear
     echo "## 📊 CCACHE 编译缓存状态"
@@ -152,7 +152,7 @@ ccache_status() {
     read -p "按任意键返回主菜单..."
 }
 
-# 配置导入/导出功能
+# 配置导入/导出功能 (不变)
 export_configs() {
     local backup_dir="$BUILD_ROOT/configs_backup"
     mkdir -p "$backup_dir"
@@ -193,9 +193,10 @@ import_configs() {
     read -p "按任意键继续..."
 }
 
-# --- 4. 源码管理 (缺失函数恢复) ---
 
-# 源码克隆或更新
+# --- 4. 源码管理 (不变) ---
+
+# 源码克隆或更新 (不变)
 clone_or_update_source() {
     local REPO_URL="$1"
     local FW_BRANCH="$2"
@@ -234,9 +235,9 @@ clone_or_update_source() {
     return 0
 }
 
-# 预编译检查 (确保 pre_build_checks 存在)
+# 预编译检查 (不变)
 pre_build_checks() {
-    echo -e "\n--- ${BLUE}🔎 编译前环境检查 (V6.2.1)${NC} ---" | tee -a "$BUILD_LOG_PATH"
+    echo -e "\n--- ${BLUE}🔎 编译前环境检查 (V6.2.2)${NC} ---" | tee -a "$BUILD_LOG_PATH"
     
     local REQUIRED_SPACE_KB=10485760 # 10 GB
     local available_kb=$(df -k . | awk 'NR==2 {print $4}' 2>/dev/null)
@@ -267,7 +268,29 @@ pre_build_checks() {
     return 0
 }
 
-# --- 5. 菜单与交互 (核心函数恢复) ---
+# 验证源码完整性 (新增)
+validate_source_integrity() {
+    local source_dir="$1"
+    
+    if [ ! -d "$source_dir/.git" ]; then
+        echo -e "${RED}❌ 源码目录不是一个有效的 Git 仓库。${NC}"
+        return 1
+    fi
+    
+    # 检查是否有未提交的更改
+    if [ -n "$(cd "$source_dir" && git status --porcelain 2>/dev/null)" ]; then
+        echo -e "${YELLOW}⚠️  警告：源码目录有未提交的更改，这可能会影响编译结果。${NC}"
+        read -p "是否继续？(y/n): " confirm
+        if [[ "$confirm" != "y" ]]; then
+            return 1
+        fi
+    fi
+    
+    return 0
+}
+
+
+# --- 5. 菜单与交互 ---
 
 main_menu() {
     check_and_install_dependencies
@@ -278,8 +301,8 @@ main_menu() {
     while true; do
         clear
         echo "====================================================="
-        echo "    🔥 ImmortalWrt 固件编译管理脚本 V6.2.1 🔥"
-        echo "   (核心功能恢复 | CCACHE: $CCACHE_LIMIT 上限)"
+        echo "    🔥 ImmortalWrt 固件编译管理脚本 V6.2.2 🔥"
+        echo "   (健壮性增强 | CCACHE: $CCACHE_LIMIT 上限)"
         echo "====================================================="
         echo "1) 🌟 新建机型配置 (Create New Configuration)"
         echo "2) ⚙️ 选择/编辑/删除配置 (Select/Edit/Delete)"
@@ -307,7 +330,7 @@ main_menu() {
 }
 
 
-# 新建配置 (恢复)
+# 新建配置 (不变)
 create_config() {
     while true; do
         clear
@@ -347,7 +370,7 @@ create_config() {
     done
 }
 
-# 选择配置 (不变)
+# 选择配置 (修复3：改进配置文件名提取)
 select_config() {
     clear
     echo -e "## ${BLUE}⚙️ 选择配置${NC}"
@@ -368,7 +391,18 @@ select_config() {
     for file in "${configs[@]}"; do
         if [ -f "$file" ]; then
             filename=$(basename "$file" .conf)
-            local cfg_file_name=$(grep "CONFIG_FILE_NAME=" "$file" | head -1 | sed -n 's/^CONFIG_FILE_NAME="\([^"]*\)"/\1/p')
+            
+            # 修复3：改进配置文件名提取
+            declare -A tmp_vars
+            while read -r line; do
+                if [[ "$line" =~ ^([A-Z_]+)=\"(.*)\"$ ]]; then
+                    local key="${BASH_REMATCH[1]}"
+                    local value="${BASH_REMATCH[2]}"
+                    tmp_vars["$key"]="$value"
+                fi
+            done < "$file"
+            
+            local cfg_file_name="${tmp_vars[CONFIG_FILE_NAME]}"
             local summary=$(get_config_summary "$cfg_file_name")
             
             printf "%-3s %-25s %s\n" "$i)" "$filename" "$summary"
@@ -396,7 +430,7 @@ select_config() {
 }
 
 
-# 启动编译流程 (恢复)
+# 启动编译流程 (不变)
 start_build_process() {
     clear
     local configs=("$CONFIGS_DIR"/*.conf)
@@ -442,12 +476,12 @@ start_build_process() {
 }
 
 
-# 运行 Menuconfig (恢复)
+# 运行 Menuconfig (不变)
 run_menuconfig() {
     local source_dir="$1"
     local config_file_path="$2"
     
-    echo -e "\n--- ${BLUE}⚙️ 运行 Menuconfig (V6.2.1)${NC} ---"
+    echo -e "\n--- ${BLUE}⚙️ 运行 Menuconfig (V6.2.2)${NC} ---"
     
     (
         cd "$source_dir" || exit 1
@@ -483,7 +517,7 @@ run_menuconfig() {
 }
 
 
-# 配置交互界面
+# 配置交互界面 (不变)
 config_interaction() {
     local CONFIG_NAME="$1"
     local CONFIG_FILE="$CONFIGS_DIR/$CONFIG_NAME.conf"
@@ -572,7 +606,7 @@ config_interaction() {
 }
 
 
-# 插件管理 (恢复)
+# 插件管理 (不变)
 manage_plugins_menu() {
     local -n vars_array=$1
     while true; do
@@ -687,15 +721,36 @@ validate_build_config() {
 }
 
 
-# 核心编译执行 (清理优化/进度条优化)
+# 核心编译执行 (修复 1, 2, 4)
 execute_build() {
     local CONFIG_NAME="$1"
     local -n VARS=$2
     
-    # ... (变量定义/日志路径定义不变)
+    # 修复1：确保所有必要变量都定义
+    local FW_TYPE="${VARS[FW_TYPE]}"
+    local FW_BRANCH="${VARS[FW_BRANCH]}"
+    local REPO_URL="${VARS[REPO_URL]}"
+    local CFG_FILE="${VARS[CONFIG_FILE_NAME]}"
     
-    # 性能优化 2: 自动调整编译作业数
-    # ... (JOBS_N 计算逻辑不变)
+    local BUILD_TIME_STAMP_FULL=$(date +%Y%m%d_%H%M%S) 
+    local BUILD_LOG_PATH="$LOG_DIR/build_${CONFIG_NAME}_${BUILD_TIME_STAMP_FULL}.log"
+
+    echo -e "\n=== ${BLUE}🚀 开始编译 [$CONFIG_NAME] (V6.2.2)${NC} ===" | tee -a "$BUILD_LOG_PATH"
+    echo "日志文件: $BUILD_LOG_PATH" | tee -a "$BUILD_LOG_PATH"
+    
+    # 性能优化：自动调整编译作业数
+    local JOBS_N=$(nproc) 
+    local TOTAL_MEM_KB=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo 0)
+    local MEM_PER_JOB=1500000 # 1.5GB
+    
+    if [ "$TOTAL_MEM_KB" -gt 0 ] && [ "$TOTAL_MEM_KB" -gt "$MEM_PER_JOB" ]; then
+        local MAX_JOBS_BY_MEM=$((TOTAL_MEM_KB / MEM_PER_JOB))
+        if [ "$MAX_JOBS_BY_MEM" -lt "$JOBS_N" ]; then
+            echo -e "${YELLOW}⚠️  内存限制：从 ${JOBS_N} 作业调整为 ${MAX_JOBS_BY_MEM} 作业${NC}" | tee -a "$BUILD_LOG_PATH"
+            JOBS_N="$MAX_JOBS_BY_MEM"
+        fi
+    fi
+    echo "使用 ${JOBS_N} 个编译作业 (make -j${JOBS_N})" | tee -a "$BUILD_LOG_PATH"
     
     # 1. 源码准备
     if ! clone_or_update_source "$REPO_URL" "$FW_BRANCH" "$FW_TYPE"; then
@@ -704,13 +759,16 @@ execute_build() {
     
     local START_TIME=$(date +%s)
     
+    # 子Shell隔离环境
     (
-        cd "$CURRENT_SOURCE_DIR" || exit 1
+        cd "$CURRENT_SOURCE_DIR" || { echo -e "${RED}❌ 无法进入源码目录${NC}"; exit 1; }
         
+        # 启用 CCACHE
         export CCACHE_DIR="$CCACHE_DIR"
         export PATH="/usr/lib/ccache:$PATH"
         ccache -z 2>/dev/null
         
+        # 清理环境变量
         export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         unset CC CXX LD AR AS CPPFLAGS CFLAGS CXXFLAGS LDFLAGS
         local GIT_COMMIT_ID=$(git rev-parse --short HEAD 2>/dev/null || echo "Unknown")
@@ -734,7 +792,15 @@ execute_build() {
                     local size_after=$(du -sh . 2>/dev/null | awk '{print $1}')
                     echo "清理完成 (剩余占用: $size_after)" | tee -a "$BUILD_LOG_PATH"
                     ;;
-                2) make clean-temp 2>&1 | tee -a "$BUILD_LOG_PATH" ;;
+                2) 
+                    echo "执行 make clean-temp..." | tee -a "$BUILD_LOG_PATH"
+                    if make help 2>/dev/null | grep -q "clean-temp"; then
+                        make clean-temp 2>&1 | tee -a "$BUILD_LOG_PATH"
+                    else
+                        echo "当前源码不支持 clean-temp 目标，改为清理临时文件" | tee -a "$BUILD_LOG_PATH"
+                        rm -rf tmp/ 2>/dev/null
+                    fi
+                    ;;
                 3) echo "跳过清理，尝试断点续编..." | tee -a "$BUILD_LOG_PATH" ;;
                 *) echo "跳过清理，尝试断点续编..." | tee -a "$BUILD_LOG_PATH" ;;
             esac
@@ -742,43 +808,109 @@ execute_build() {
             make clean 2>&1 | tee -a "$BUILD_LOG_PATH"
         fi
 
-        # ... (Feeds & 插件逻辑不变)
+        # 2. Feeds & 注入
+        run_custom_injections "${VARS[CUSTOM_INJECTIONS]}" "100" "$CURRENT_SOURCE_DIR"
         
-        # 5. 下载与编译 (进度条显示优化)
-        # ... (make download 逻辑不变)
+        if [[ "${VARS[ENABLE_QMODEM]}" == "y" ]]; then
+             if ! grep -q "qmodem" feeds.conf.default; then echo 'src-git qmodem https://github.com/FUjr/QModem.git;main' >> feeds.conf.default; fi
+        fi
+        
+        echo -e "\n--- ${BLUE}更新 Feeds${NC} ---" | tee -a "$BUILD_LOG_PATH"
+        ./scripts/feeds update -a && ./scripts/feeds install -a || { echo -e "${RED}Feeds 失败${NC}"; exit 1; }
+        
+        local plugin_string="${VARS[EXTRA_PLUGINS]}"
+        if [[ -n "$plugin_string" ]]; then
+            echo -e "\n--- ${BLUE}安装额外插件${NC} ---" | tee -a "$BUILD_LOG_PATH"
+            local plugins_array_string=$(echo "$plugin_string" | tr '##' '\n')
+            local plugins
+            IFS=$'\n' read -rd '' -a plugins <<< "$plugins_array_string"
+            for p in "${plugins[@]}"; do 
+                [[ -z "$p" ]] && continue
+                
+                # 安全性检查：简单恶意命令检查
+                if [[ "$p" =~ "rm\s+-rf\s+/" || "$p" =~ ":(){:|:&};:" ]]; then
+                    echo -e "${RED}❌ 安全警告：跳过潜在危险命令: $p${NC}" | tee -a "$BUILD_LOG_PATH"
+                    continue
+                fi
+                
+                echo "执行: $p" | tee -a "$BUILD_LOG_PATH"
+                eval "$p" || echo -e "${YELLOW}警告: 插件命令失败，忽略。${NC}" | tee -a "$BUILD_LOG_PATH"
+            done
+        fi
+
+        # 3. 配置文件处理
+        echo -e "\n--- ${BLUE}导入配置 ($CFG_FILE)${NC} ---" | tee -a "$BUILD_LOG_PATH"
+        local src_cfg="$USER_CONFIG_DIR/$CFG_FILE"
+        local ext="${CFG_FILE##*.}"
+        
+        if [[ ! -f "$src_cfg" ]]; then 
+            echo -e "${RED}❌ 错误: 配置文件丢失${NC}" | tee -a "$BUILD_LOG_PATH"
+            exit 1
+        fi
+
+        if [[ "$ext" == "diffconfig" ]]; then
+            echo "ℹ️  检测到 .diffconfig 差异配置文件，执行 make defconfig..." | tee -a "$BUILD_LOG_PATH"
+            cp "$src_cfg" .config
+            make defconfig 2>&1 | tee -a "$BUILD_LOG_PATH" || { echo -e "${RED}make defconfig 失败${NC}"; exit 1; }
+        else
+            echo "ℹ️  检测到完整 .config 文件，执行 make defconfig (修复差异)..." | tee -a "$BUILD_LOG_PATH"
+            cp "$src_cfg" .config
+            make defconfig 2>&1 | tee -a "$BUILD_LOG_PATH"
+        fi
+        
+        # 4. 后期注入 (阶段 850)
+        run_custom_injections "${VARS[CUSTOM_INJECTIONS]}" "850" "$CURRENT_SOURCE_DIR"
+        
+        # 5. 下载与编译
+        local DOWNLOAD_JOBS=$((JOBS_N > 8 ? 8 : JOBS_N)) # 限制最大并行下载数
+        echo -e "\n--- ${BLUE}🌐 下载依赖包 (make download -j$DOWNLOAD_JOBS)${NC} ---" | tee -a "$BUILD_LOG_PATH"
+        make download -j"$DOWNLOAD_JOBS" V=s 2>&1 | tee -a "$BUILD_LOG_PATH"
+        if [ ${PIPESTATUS[0]} -ne 0 ]; then
+             echo -e "${RED}❌ 下载失败，请检查网络。${NC}" | tee -a "$BUILD_LOG_PATH"
+             exit 1
+        fi
         
         echo -e "\n--- ${BLUE}🚀 开始编译 (make -j$JOBS_N)${NC} ---" | tee -a "$BUILD_LOG_PATH"
         
-        # 进度跟踪准备
-        local total_targets=$(make -n -j1 V=s 2>/dev/null | grep -c '^make\[.*\]: Entering directory .*package/')
+        # 修复2：改进进度条计算
+        local total_targets=$(find package -name Makefile 2>/dev/null | wc -l)
+        if [ "$total_targets" -eq 0 ]; then
+             total_targets=$(ls -d package/*/ 2>/dev/null | wc -l)
+        fi
         
         # 进度跟踪子进程
         (
-            # 将进度条信息写入 /dev/tty (终端)
             sleep 5 
             local compiled_count=0
             
             if [ "$total_targets" -gt 0 ]; then
+                echo "估算总编译目标数: $total_targets" | tee -a "$BUILD_LOG_PATH"
+                
                 tail -f "$BUILD_LOG_PATH" 2>/dev/null | while read LINE; do
-                    if echo "$LINE" | grep -q "^Built target "; then
+                    if echo "$LINE" | grep -q "Package/.*[done]\|Built target \|package/.*: install"; then
                         compiled_count=$((compiled_count + 1))
                         local percentage=$((compiled_count * 100 / total_targets))
                         local bar_length=30
                         local filled=$((percentage * bar_length / 100))
                         local empty=$((bar_length - filled))
                         
-                        # 修复 2: 进度条构建简化
+                        # 进度条构建
                         local progress_bar=""
                         progress_bar=$(printf "%${filled}s" | sed 's/ /=/g')
                         progress_bar+=$(printf "%${empty}s" | sed 's/ /-/g')
-
-                        # 直接写入终端（/dev/tty 或 /dev/stderr）
-                        echo -ne "\r${GREEN}✅ 编译进度: [${progress_bar}] ${percentage}% (${compiled_count}/${total_targets})${NC}" >/dev/stderr
+                        
+                        # 修复4：改进终端颜色输出 (仅在交互式终端使用颜色)
+                        if [ -t 1 ]; then
+                            echo -ne "\r${GREEN}✅ 编译进度: [${progress_bar}] ${percentage}% (${compiled_count}/${total_targets})${NC}" >&2
+                        else
+                            # 在非交互式终端或管道中，不使用颜色
+                            echo -ne "\r编译进度: [${progress_bar}] ${percentage}% (${compiled_count}/${total_targets})" >&2
+                        fi
                     fi
                     
                     if echo "$LINE" | grep -q "make\[.*\]: Leaving directory"; then break; fi
                 done
-                echo "" >/dev/stderr
+                echo "" >&2 
             fi
         ) &
         PROGRESS_PID=$!
@@ -786,14 +918,54 @@ execute_build() {
         # 执行编译
         /usr/bin/time -f "MAKE_REAL_TIME=%e" make -j"$JOBS_N" V=s 2>&1 | tee -a "$BUILD_LOG_PATH"
         
-        # ... (后续处理逻辑不变)
-        
+        # 停止后台进度监控进程
+        kill $PROGRESS_PID 2>/dev/null
+        wait $PROGRESS_PID 2>/dev/null 
+        echo "--- ⏱️ 跟踪结束 ---" | tee -a "$BUILD_LOG_PATH"
+
+        if [ ${PIPESTATUS[0]} -eq 0 ]; then
+            local END_TIME=$(date +%s)
+            local DURATION=$((END_TIME - START_TIME))
+            local DURATION_STR=$(printf '%dh %dm %ds' $((DURATION/3600)) $(((DURATION%3600)/60)) $((DURATION%60)))
+            
+            echo -e "\n${GREEN}✅ 编译成功！总耗时: $DURATION_STR${NC}" | tee -a "$BUILD_LOG_PATH"
+            
+            echo "--- CCACHE 统计 ---" | tee -a "$BUILD_LOG_PATH"
+            ccache -s 2>&1 | tee -a "$BUILD_LOG_PATH"
+            
+            local ARCHIVE_NAME="${FW_TYPE}_${CONFIG_NAME}_${BUILD_TIME_STAMP_FULL}_${GIT_COMMIT_ID}_T${DURATION}s"
+            local FIRMWARE_DIR="$CURRENT_SOURCE_DIR/bin/targets"
+            local target_subdir=$(find "$FIRMWARE_DIR" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | head -n 1)
+            
+            if [ -d "$target_subdir" ]; then
+                cp "$BUILD_LOG_PATH" "$target_subdir/build.log"
+                local zip_path="$OUTPUT_DIR/$ARCHIVE_NAME.zip"
+                (
+                    cd "$target_subdir/../"
+                    zip -r "$zip_path" "$(basename "$target_subdir")" "build.log" 2>/dev/null
+                )
+                echo -e "${GREEN}📦 固件已归档: $zip_path${NC}" | tee -a "$BUILD_LOG_PATH"
+            else
+                echo -e "${YELLOW}⚠️  未找到固件目录，仅保存日志。${NC}" | tee -a "$BUILD_LOG_PATH"
+            fi
+            exit 0
+        else
+            echo -e "\n${RED}❌ 编译失败${NC}" | tee -a "$BUILD_LOG_PATH"
+            exit 1
+        fi
     )
-    # ... (返回值处理不变)
+    
+    local ret=$?
+    if [ $ret -ne 0 ]; then
+        echo -e "${RED}❌ 编译出错，请查看日志: $BUILD_LOG_PATH${NC}"
+        read -p "按回车返回..."
+    else
+        read -p "编译完成。按回车返回..."
+    fi
 }
 
 
-# 脚本注入执行 (恢复)
+# 脚本注入执行 (不变)
 run_custom_injections() {
     local INJECTIONS_STRING="$1"
     local TARGET_STAGE="$2"
