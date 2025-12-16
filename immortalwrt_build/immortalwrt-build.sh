@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ==========================================================
-# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V6.2.4
+# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V6.2.5
 # ----------------------------------------------------------
-# (功能完整，集成V6.2.3所有增强)
+# (健壮性增强 | 智能诊断 | 实时进度监控)
 # ==========================================================
 
 # --- 1. 颜色定义与基础变量 ---
@@ -24,7 +24,7 @@ USER_CONFIG_DIR="$BUILD_ROOT/user_configs"
 EXTRA_SCRIPT_DIR="$BUILD_ROOT/custom_scripts"
 OUTPUT_DIR="$BUILD_ROOT/output"
 CCACHE_DIR="$BUILD_ROOT/ccache" 
-BACKUP_DIR="$BUILD_ROOT/backup" # 新增备份目录
+BACKUP_DIR="$BUILD_ROOT/backup"
 
 # 全局变量
 declare -g BUILD_LOG_PATH=""
@@ -35,48 +35,84 @@ declare -g TOTAL_MEM_KB=0
 
 CONFIG_VAR_NAMES=(FW_TYPE REPO_URL FW_BRANCH CONFIG_FILE_NAME EXTRA_PLUGINS CUSTOM_INJECTIONS ENABLE_QMODEM)
 
-# --- 2. 核心辅助函数 (所有 V6.2.3 增强功能保留) ---
+# --- 2. 核心辅助函数 (统一使用 snake_case 命名) ---
 
-# 进度条监控函数
+# 进度条监控函数 (使用您的精确改进版本)
 monitor_progress_bar() {
-    # ... (代码不变) ...
     local total_targets=$1
     local log_file=$2
     
     if [ "$total_targets" -le 0 ]; then return; fi
     
-    local completed_targets=0
-    local last_progress=0
-    
     echo -e "\n--- ${GREEN}✅ 编译进度: 0%${NC} ---"
     
-    while true; do
-        completed_targets=$(grep -c "make\[.*\]: Leaving directory" "$log_file" 2>/dev/null)
+    # 使用更精确的进度检测
+    local completed_targets=0
+    local last_progress=0
+    local start_time=$(date +%s)
+    
+    # 创建一个临时管道来实时处理日志
+    local pipe_file="/tmp/progress_monitor_$$.pipe"
+    mkfifo "$pipe_file"
+    
+    # 使用tail实时跟踪日志
+    tail -f "$log_file" 2>/dev/null > "$pipe_file" &
+    local tail_pid=$!
+    
+    while IFS= read -r line; do
+        # 检测编译目标完成（更精确的模式）
+        # 匹配 Package/xxx.mk done, Built target, Finished building target, collect2:...ld
+        if echo "$line" | grep -q "Package/.*\.mk.*done\|Built target \|Finished building target\|collect2:.*ld"; then
+            completed_targets=$((completed_targets + 1))
+            
+            # 确保不超出总数
+            if [ "$completed_targets" -gt "$total_targets" ]; then
+                completed_targets=$total_targets
+            fi
+
+            local current_progress=$(( (completed_targets * 100) / total_targets ))
+            
+            if [ "$current_progress" -gt "$last_progress" ]; then
+                last_progress="$current_progress"
+                
+                # 计算预估剩余时间 (ETA)
+                local current_time=$(date +%s)
+                local elapsed=$((current_time - start_time))
+                local remaining_str=""
+                
+                if [ "$current_progress" -gt 5 ] && [ "$elapsed" -gt 0 ]; then
+                    local total_estimated=$((elapsed * 100 / current_progress))
+                    local remaining=$((total_estimated - elapsed))
+                    
+                    if [ "$remaining" -gt 3600 ]; then
+                        remaining_str=" (~$((remaining/3600))h$(((remaining%3600)/60))m)"
+                    elif [ "$remaining" -gt 60 ]; then
+                        remaining_str=" (~$((remaining/60))m$((remaining%60))s)"
+                    else
+                        remaining_str=" (~${remaining}s)"
+                    fi
+                fi
+                
+                echo -ne "${BLUE}Building: ${NC}[${GREEN}$current_progress%${NC}] ($completed_targets/$total_targets)$remaining_str - $(date +%H:%M:%S)\r"
+            fi
+        fi
         
-        if [ "$completed_targets" -gt "$total_targets" ]; then
-            completed_targets=$total_targets
+        # 检测编译结束
+        if echo "$line" | grep -q "make\[.*\]: Leaving directory.*\.\./\.\."; then
+            break
         fi
-
-        local current_progress=$(( (completed_targets * 100) / total_targets ))
-
-        if [ "$current_progress" -gt "$last_progress" ]; then
-            last_progress="$current_progress"
-            echo -ne "${BLUE}Building: ${NC}[${GREEN}$current_progress%${NC}] ($completed_targets/$total_targets) - $(date +%H:%M:%S)\r"
-        fi
-
-        if ! pgrep -f "make -j$JOBS_N V=s" > /dev/null; then
-            break 
-        fi
-
-        sleep 5
-    done
-    echo -e "\n${GREEN}✅ 编译进度: 100%${NC} (或进程已结束)${NC}"
+    done < "$pipe_file"
+    
+    # 清理
+    kill "$tail_pid" 2>/dev/null
+    rm -f "$pipe_file"
+    
+    echo -e "\n${GREEN}✅ 编译进度: 100%${NC} (或进程已结束)"
 }
 
 
 # 配置文件签名
 generate_config_signature() {
-    # ... (代码不变) ...
     local config_file="$1"
     local signature_file="${config_file}.sig"
     if command -v sha256sum &> /dev/null; then
@@ -87,34 +123,50 @@ generate_config_signature() {
     fi
 }
 
+# 验证签名 (使用您的修复逻辑)
 verify_config_signature() {
-    # ... (代码不变) ...
     local config_file="$1"
     local signature_file="${config_file}.sig"
-    if [ -f "$signature_file" ]; then
-        local current_hash=$(sha256sum "$config_file" | cut -d' ' -f1)
-        local stored_hash=$(cat "$signature_file" 2>/dev/null)
-        if [[ "$current_hash" != "$stored_hash" ]]; then
-            echo -e "${RED}⚠️  警告：配置文件签名不匹配，可能已被修改！${NC}" | tee -a "$BUILD_LOG_PATH"
-            return 1
-        fi
-        echo -e "${GREEN}✅ 配置文件签名校验通过。${NC}"
+    
+    # 如果没有签名文件，跳过检查（但给出警告）
+    if [ ! -f "$signature_file" ]; then
+        echo -e "${YELLOW}⚠️  警告：配置文件没有签名文件，跳过签名校验${NC}"
+        return 0
     fi
+    
+    if ! command -v sha256sum &> /dev/null; then
+        echo -e "${YELLOW}⚠️  警告：无法校验签名，sha256sum命令未找到${NC}"
+        return 0
+    fi
+    
+    local current_hash=$(sha256sum "$config_file" 2>/dev/null | cut -d' ' -f1)
+    local stored_hash=$(cat "$signature_file" 2>/dev/null)
+    
+    if [ -z "$current_hash" ] || [ -z "$stored_hash" ]; then
+        echo -e "${RED}❌ 错误：无法读取签名信息${NC}"
+        return 1
+    fi
+    
+    if [[ "$current_hash" != "$stored_hash" ]]; then
+        echo -e "${RED}❌ 错误：配置文件签名不匹配，可能已被修改！${NC}"
+        return 1
+    fi
+    
+    echo -e "${GREEN}✅ 配置文件签名校验通过。${NC}"
     return 0
 }
 
 # 设置资源限制
 set_resource_limits() {
-    # ... (代码不变) ...
     JOBS_N=$(nproc)
     TOTAL_MEM_KB=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo 0)
 
+    # ulimit: 限制 CPU 时间 (4小时) 和 虚拟内存 (80% 物理内存)
     ulimit -t $((3600 * 4)) 2>/dev/null
     
     if [ "$TOTAL_MEM_KB" -gt 0 ]; then
         local max_mem_kb=$((TOTAL_MEM_KB * 80 / 100))
         ulimit -v "$max_mem_kb" 2>/dev/null
-        echo "资源限制: CPU (4h), 内存 (~$((max_mem_kb / 1024 / 1024))GB)" | tee -a "$BUILD_LOG_PATH"
     fi
     
     local max_procs=$((JOBS_N * 2 + 50))
@@ -123,7 +175,6 @@ set_resource_limits() {
 
 # 生成编译摘要报告
 generate_build_summary() {
-    # ... (代码不变) ...
     local config_name="$1"
     local duration="$2"
     local log_file="$3"
@@ -152,7 +203,7 @@ generate_build_summary() {
     
     echo -e "\n--- 📊 编译性能分析 ---" | tee -a "$log_file"
     if command -v ccache &> /dev/null; then
-        local ccache_stats=$(ccache -s)
+        local ccache_stats=$(ccache -s 2>/dev/null)
         local hit_rate=$(echo "$ccache_stats" | grep -E "cache hit \(rate\)" | grep -oE "[0-9]+\.[0-9]+%" || echo "N/A")
         local cache_size=$(echo "$ccache_stats" | grep -E "cache size" | head -1 | grep -oE "[0-9]+\.[0-9]+ [A-Z]B" || echo "N/A")
         echo "缓存命中率: $hit_rate | 缓存大小: $cache_size" | tee -a "$log_file"
@@ -165,7 +216,6 @@ generate_build_summary() {
 
 # 辅助函数：模拟配置信息加载
 get_config_summary() {
-    # ... (代码不变) ...
     local config_name="$1"
     local config_file="$CONFIGS_DIR/$config_name.conf"
     declare -A VARS
@@ -179,7 +229,6 @@ get_config_summary() {
 
 # 辅助函数：加载配置变量
 load_config_vars() {
-    # ... (代码不变) ...
     local config_name="$1"
     local -n VARS=$2
     local config_file="$CONFIGS_DIR/$config_name.conf"
@@ -194,7 +243,6 @@ load_config_vars() {
 
 # 辅助函数：模拟自定义注入脚本执行
 run_custom_injections() {
-    # ... (代码不变) ...
     local injections="$1"
     local stage="$2"
     local source_dir="$3"
@@ -213,15 +261,104 @@ run_custom_injections() {
     fi
 }
 
+# 编译失败智能分析器 (新增功能)
+analyze_build_failure() {
+    local log_file="$1"
+    local error_lines=$(tail -100 "$log_file" 2>/dev/null)
+    
+    echo -e "\n--- ${RED}🔍 编译失败分析${NC} ---"
+    
+    local error_found=0
+    
+    # 1. 磁盘空间不足
+    if echo "$error_lines" | grep -q "No space left on device\|disk full"; then
+        echo -e "${YELLOW}⚠️  错误类型: 磁盘空间不足${NC}"
+        echo "解决方案:"
+        echo "  1. 清理磁盘空间: df -h"
+        echo "  2. 删除旧的编译输出: rm -rf $BUILD_ROOT/output/*"
+        echo "  3. 清理CCACHE缓存: ccache -C"
+        error_found=1
+    fi
+    
+    # 2. 内存不足
+    if echo "$error_lines" | grep -q "Killed\|out of memory\|Cannot allocate memory"; then
+        echo -e "${YELLOW}⚠️  错误类型: 内存不足${NC}"
+        echo "解决方案:"
+        echo "  1. 减少编译作业数"
+        echo "  2. 增加交换空间"
+        error_found=1
+    fi
+    
+    # 3. 网络下载失败
+    if echo "$error_lines" | grep -q "Connection refused\|Failed to connect\|404 Not Found\|Could not resolve host"; then
+        echo -e "${YELLOW}⚠️  错误类型: 网络连接问题${NC}"
+        echo "解决方案:"
+        echo "  1. 检查网络连接和代理设置"
+        echo "  2. 尝试手动下载缺失文件"
+        error_found=1
+    fi
+    
+    # 4. 编译依赖缺失
+    if echo "$error_lines" | grep -q "No such file or directory\|command not found\|未找到命令"; then
+        echo -e "${YELLOW}⚠️  错误类型: 依赖缺失${NC}"
+        echo "解决方案: 安装缺失的依赖包"
+        local missing_cmd=$(echo "$error_lines" | grep -o "command not found: [^ ]*" | head -1 | sed 's/command not found: //')
+        if [ -n "$missing_cmd" ]; then echo "  可能缺失的命令: $missing_cmd"; fi
+        error_found=1
+    fi
+    
+    # 5. 配置文件错误
+    if echo "$error_lines" | grep -q "Invalid config option\|未知的配置选项\|Configuration failed"; then
+        echo -e "${YELLOW}⚠️  错误类型: 配置文件错误${NC}"
+        echo "解决方案: 检查配置文件语法或使用 make menuconfig 修复"
+        error_found=1
+    fi
+    
+    # 6. 特定包编译失败
+    if echo "$error_lines" | grep -q "recipe for target.*failed\|Error [0-9]"; then
+        local failed_pkg=$(echo "$error_lines" | grep -B5 "recipe for target" | grep -E "Package/|make\[.*\]: Entering directory" | tail -2 | head -1)
+        if [ -n "$failed_pkg" ]; then
+            echo -e "${YELLOW}⚠️  错误类型: 特定包编译失败${NC}"
+            echo "失败包: $failed_pkg"
+            echo "解决方案: 检查包的依赖或禁用该包"
+        else
+            echo -e "${YELLOW}⚠️  错误类型: 编译过程失败${NC}"
+        fi
+        error_found=1
+    fi
+    
+    # 如果没有匹配到已知错误模式
+    if [ "$error_found" -eq 0 ]; then
+        echo -e "${YELLOW}⚠️  错误类型: 未知错误${NC}"
+        echo "请查看日志文件末尾获取详细信息:"
+        tail -15 "$log_file" 2>/dev/null | while read line; do
+            if echo "$line" | grep -q -i "error\|fail\|致命\|错误"; then
+                echo -e "${RED}$line${NC}"
+            else
+                echo "$line"
+            fi
+        done
+        echo "----------------------------------------"
+    fi
+    
+    echo -e "\n${BLUE}💡 快速修复建议:${NC}"
+    echo "  1. 执行清理: cd $CURRENT_SOURCE_DIR && make clean"
+    echo "  2. 重新下载依赖: make download -j$(nproc)"
+    
+    return 0
+}
+
 
 # --- 3. 初始化与依赖 ---
 
 check_and_install_dependencies() {
     echo -e "--- ${BLUE}系统环境检查与初始化...${NC} ---"
     
-    for cmd in git make bash grep awk sha256sum stat zip unzip; do # 添加 zip/unzip
+    local missing_deps=0
+    for cmd in git make bash grep awk sha256sum stat zip unzip; do
         if ! command -v "$cmd" &> /dev/null; then
             echo -e "${RED}❌ 缺少依赖：$cmd。请安装。${NC}"
+            missing_deps=1
         fi
     done
     
@@ -257,14 +394,18 @@ CONFIG_TESTING_KERNEL=y
 EOF
         generate_config_signature "$USER_CONFIG_DIR/default_x86_64.config"
     fi
+    
+    if [ "$missing_deps" -eq 1 ]; then
+        echo -e "${RED}⚠️  请安装缺失的依赖后再运行脚本。${NC}"
+        exit 1
+    fi
     return 0
 }
 
 
-# --- 4. 核心编译流程 (代码不变) ---
+# --- 4. 核心编译流程 ---
 
 clone_or_update_source() {
-    # ... (代码不变) ...
     local REPO_URL="$1"
     local FW_BRANCH="$2"
     local FW_TYPE="$3"
@@ -298,7 +439,6 @@ clone_or_update_source() {
 }
 
 pre_build_checks() {
-    # ... (代码不变) ...
     echo -e "--- ${BLUE}环境与配置预检查${NC} ---"
     
     local available_space=$(df -BG "$BUILD_ROOT" | awk 'NR==2 {print $4}' | sed 's/G//' 2>/dev/null)
@@ -317,7 +457,6 @@ pre_build_checks() {
 }
 
 validate_build_config() {
-    # ... (代码不变) ...
     local -n VARS=$1
     local config_name="$2"
     local error_count=0
@@ -332,6 +471,7 @@ validate_build_config() {
     else
         echo -e "${GREEN}✅ 配置文件存在: $config_path${NC}"
         
+        # 文件大小和内容检查
         local file_size=$(stat -c%s "$config_path" 2>/dev/null || echo "0")
         if [ "$file_size" -lt 100 ]; then
             echo -e "${YELLOW}⚠️  警告：配置文件过小（${file_size} 字节），可能为空或不完整${NC}"
@@ -343,11 +483,7 @@ validate_build_config() {
             error_count=$((error_count + 1))
         fi
         
-        if ! grep -q "CONFIG_TARGET_" "$config_path"; then
-            echo -e "${YELLOW}⚠️  警告：配置文件中未找到目标架构定义${NC}"
-            warning_count=$((warning_count + 1))
-        fi
-        
+        # 签名校验
         if ! verify_config_signature "$config_path"; then
              error_count=$((error_count + 1))
         fi
@@ -372,22 +508,22 @@ validate_build_config() {
 }
 
 execute_build() {
-    # ... (代码不变) ...
-    local CONFIG_NAME="$1"
+    local config_name="$1"
     local -n VARS=$2
     
     local FW_TYPE="${VARS[FW_TYPE]}"; local FW_BRANCH="${VARS[FW_BRANCH]}"
     local REPO_URL="${VARS[REPO_URL]}"; local CFG_FILE="${VARS[CONFIG_FILE_NAME]}"
     local BUILD_TIME_STAMP_FULL=$(date +%Y%m%d_%H%M%S) 
-    BUILD_LOG_PATH="$LOG_DIR/build_${CONFIG_NAME}_${BUILD_TIME_STAMP_FULL}.log"
+    BUILD_LOG_PATH="$LOG_DIR/build_${config_name}_${BUILD_TIME_STAMP_FULL}.log"
 
-    echo -e "\n=== ${BLUE}🚀 开始编译 [$CONFIG_NAME] (V6.2.4)${NC} ===" | tee -a "$BUILD_LOG_PATH"
+    echo -e "\n=== ${BLUE}🚀 开始编译 [$config_name] (V6.2.5)${NC} ===" | tee -a "$BUILD_LOG_PATH"
     echo "日志文件: $BUILD_LOG_PATH" | tee -a "$BUILD_LOG_PATH"
     
     set_resource_limits
     
     local MEM_PER_JOB=1500000 
     
+    # 限制 JOBS_N 确保不会因内存不足而失败
     if [ "$TOTAL_MEM_KB" -gt 0 ] && [ "$TOTAL_MEM_KB" -gt "$MEM_PER_JOB" ]; then
         local MAX_JOBS_BY_MEM=$((TOTAL_MEM_KB / MEM_PER_JOB))
         if [ "$MAX_JOBS_BY_MEM" -lt "$JOBS_N" ]; then
@@ -429,14 +565,17 @@ execute_build() {
         
         local download_phase_jobs=$((JOBS_N > 8 ? 8 : JOBS_N))
         echo -e "\n--- ${BLUE}🌐 下载依赖包 (make download -j$download_phase_jobs)${NC} ---" | tee -a "$BUILD_LOG_PATH"
+        
+        # 修正的错误行: 移除 'exit 1' 后的冗余花括号
         make download -j"$download_phase_jobs" V=s 2>&1 | tee -a "$BUILD_LOG_PATH"
         if [ ${PIPESTATUS[0]} -ne 0 ]; then echo -e "${RED}❌ 下载失败${NC}" | tee -a "$BUILD_LOG_PATH"; exit 1; fi
         
         echo -e "\n--- ${BLUE}🚀 开始编译 (make -j$JOBS_N)${NC} ---" | tee -a "$BUILD_LOG_PATH"
         
+        # 目标计数 (用于精确进度条)
         local total_targets=$(make -n V=s 2>/dev/null | grep -c "^Building target \|^make\[.*\]: Entering directory.*package/")
         if [ "$total_targets" -eq 0 ]; then 
-             total_targets=$(find package -name Makefile 2>/dev/null | wc -l)
+             total_targets=$(find package -name Makefile 2>/dev/null | wc -l) # 备用计数
         fi
         
         local PROGRESS_PID=0
@@ -462,10 +601,10 @@ execute_build() {
     if [ $ret -eq 0 ]; then
         echo -e "\n${GREEN}✅ 编译成功！总耗时: $DURATION_STR${NC}"
         
-        generate_build_summary "$CONFIG_NAME" "$DURATION_STR" "$BUILD_LOG_PATH" "$FIRMWARE_DIR"
+        generate_build_summary "$config_name" "$DURATION_STR" "$BUILD_LOG_PATH" "$FIRMWARE_DIR"
         
         local GIT_COMMIT_ID=$(git rev-parse --short HEAD 2>/dev/null || echo "Unknown")
-        local ARCHIVE_NAME="${FW_TYPE}_${CONFIG_NAME}_${BUILD_TIME_STAMP_FULL}_${GIT_COMMIT_ID}_T${DURATION}s"
+        local ARCHIVE_NAME="${FW_TYPE}_${config_name}_${BUILD_TIME_STAMP_FULL}_${GIT_COMMIT_ID}_T${DURATION}s"
         local target_subdir=$(find "$FIRMWARE_DIR" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | head -n 1)
         
         if [ -d "$target_subdir" ]; then
@@ -481,23 +620,174 @@ execute_build() {
 
     else
         echo -e "${RED}❌ 编译出错 (退出码 $ret)，请查看日志: $BUILD_LOG_PATH${NC}"
-        
-        local error_log=$(tail -20 "$BUILD_LOG_PATH" 2>/dev/null)
-        if echo "$error_log" | grep -q "No space left"; then
-             echo -e "${YELLOW}⚠️  错误原因：磁盘空间不足${NC}"
-        elif echo "$error_log" | grep -q "Connection refused\|timeout\|404 Not Found"; then
-             echo -e "${YELLOW}⚠️  错误原因：网络连接或下载失败${NC}"
-        elif echo "$error_log" | grep -q "make.*Error [1-9]"; then
-             echo -e "${YELLOW}⚠️  错误原因：编译错误 (Make Error)${NC}"
-        fi
-        
-        read -p "是否尝试修复并重试？(y/n): " retry_choice
-        if [[ "$retry_choice" == "y" ]]; then
-             echo -e "${YELLOW}ℹ️  请手动检查日志文件 ($BUILD_LOG_PATH) 后重试。${NC}"
-        fi
+        analyze_build_failure "$BUILD_LOG_PATH" # 智能分析失败原因
         read -p "按回车返回..."
     fi
     return $ret
+}
+
+
+# --- 5. 新增功能模块 (智能管理与诊断) ---
+
+# 编译缓存智能管理 (新增功能)
+manage_compile_cache() {
+    while true; do
+        clear; echo -e "## ${BLUE}🔄 编译缓存智能管理${NC}"
+        
+        if ! command -v ccache &> /dev/null; then
+            echo -e "${RED}❌ CCACHE未安装，跳过缓存管理${NC}"; read -p "按回车返回..."; return
+        fi
+
+        local ccache_stats=$(ccache -s 2>/dev/null)
+        local hit_rate=$(echo "$ccache_stats" | grep -E "cache hit \(rate\)" | grep -oE "[0-9]+\.[0-9]+%" || echo "0%")
+        local cache_size=$(echo "$ccache_stats" | grep -E "cache size" | head -1 | grep -oE "[0-9]+\.[0-9]+ [A-Z]B" || echo "0.0 GB")
+        
+        echo "当前 CCACHE 状态:"
+        echo "  命中率: ${GREEN}$hit_rate${NC}"
+        echo "  缓存大小: ${YELLOW}$cache_size${NC}"
+        
+        local cache_dir_size=$(du -sh "$CCACHE_DIR" 2>/dev/null | cut -f1 || echo "N/A")
+        echo "  缓存目录 (实际): $cache_dir_size"
+
+        echo -e "\n管理选项:"
+        echo "1) 显示详细统计 (ccache -s -v)"
+        echo "2) 清空 CCACHE 缓存 (ccache -C)"
+        echo "3) 调整 CCACHE 大小限制 (当前: $CCACHE_LIMIT)"
+        echo "4) 压缩 CCACHE 缓存 (ccache -c)"
+        echo "5) 清理源码临时文件 (\$SRC/tmp)"
+        echo "6) 清理源码下载缓存 (\$SRC/dl)"
+        echo "R) 返回主菜单"
+        
+        read -p "选择操作: " cache_choice
+        
+        case $cache_choice in
+            1) ccache -s -v; read -p "按回车继续..." ;;
+            2) 
+                read -p "确定要清空 CCACHE 缓存吗？(y/n): " confirm
+                if [[ "$confirm" == "y" ]]; then
+                    ccache -C
+                    echo -e "${GREEN}✅ CCACHE 缓存已清空${NC}"
+                fi
+                sleep 1 ;;
+            3)
+                read -p "输入新的大小 (如 100G, 200G): " new_size
+                if [[ -n "$new_size" ]]; then
+                    ccache -M "$new_size"
+                    CCACHE_LIMIT="$new_size"
+                    echo -e "${GREEN}✅ 缓存大小已调整为 $new_size${NC}"
+                fi
+                sleep 1 ;;
+            4)
+                echo "正在压缩 CCACHE 缓存..."
+                ccache -c
+                echo -e "${GREEN}✅ 缓存压缩完成${NC}"
+                sleep 1 ;;
+            5)
+                if [ -d "$CURRENT_SOURCE_DIR/tmp" ]; then
+                    read -p "确定清理 \$SRC/tmp 临时文件目录? (y/n): " clean_tmp
+                    if [[ "$clean_tmp" == "y" ]]; then
+                        rm -rf "$CURRENT_SOURCE_DIR/tmp"/*
+                        echo -e "${GREEN}✅ 临时文件已清理${NC}"
+                    fi
+                else
+                    echo -e "${YELLOW}ℹ️  源码目录 $CURRENT_SOURCE_DIR/tmp 不存在。${NC}"
+                fi
+                sleep 1 ;;
+            6)
+                if [ -d "$CURRENT_SOURCE_DIR/dl" ]; then
+                    read -p "${YELLOW}⚠️  警告：清理下载缓存将导致下次编译需要重新下载所有依赖。确定继续？(y/n): ${NC}" confirm_dl
+                    if [[ "$confirm_dl" == "y" ]]; then
+                        rm -rf "$CURRENT_SOURCE_DIR/dl"/*
+                        echo -e "${GREEN}✅ 下载缓存已清理${NC}"
+                    fi
+                else
+                    echo -e "${YELLOW}ℹ️  源码目录 $CURRENT_SOURCE_DIR/dl 不存在。${NC}"
+                fi
+                sleep 1 ;;
+            R|r) return ;;
+            *) echo -e "${RED}无效选择。${NC}"; sleep 1 ;;
+        esac
+    done
+}
+
+# 编译环境诊断工具 (新增功能)
+diagnose_build_environment() {
+    clear; echo -e "## ${BLUE}🔧 编译环境诊断报告${NC}"
+    
+    local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+    local report_file="$LOG_DIR/environment_diagnosis_$(date +%Y%m%d_%H%M%S).log"
+    
+    echo "诊断时间: $timestamp" | tee -a "$report_file"
+    echo "========================================" | tee -a "$report_file"
+    
+    # 1. 系统基本信息
+    echo -e "\n${GREEN}1. 系统基本信息${NC}" | tee -a "$report_file"
+    echo "操作系统: $(lsb_release -ds 2>/dev/null || cat /etc/os-release 2>/dev/null | grep PRETTY_NAME | cut -d= -f2 | tr -d '\"' | head -1)" | tee -a "$report_file"
+    echo "内核版本: $(uname -r)" | tee -a "$report_file"
+    echo "架构: $(uname -m)" | tee -a "$report_file"
+    
+    # 2. 硬件资源
+    echo -e "\n${GREEN}2. 硬件资源${NC}" | tee -a "$report_file"
+    echo "CPU核心数: $(nproc)" | tee -a "$report_file"
+    
+    local mem_total=$(free -h | grep Mem | awk '{print $2}')
+    echo "内存总量: $mem_total" | tee -a "$report_file"
+    
+    # 磁盘空间
+    echo -e "\n磁盘空间信息 (BUILD_ROOT):" | tee -a "$report_file"
+    df -h | grep -E "^Filesystem|$BUILD_ROOT|/$" | tee -a "$report_file"
+    
+    # 3. 编译工具版本
+    echo -e "\n${GREEN}3. 编译工具版本${NC}" | tee -a "$report_file"
+    
+    local tools=("gcc" "g++" "make" "git" "python3" "perl" "bash" "ld" "sha256sum")
+    for tool in "${tools[@]}"; do
+        if command -v "$tool" &> /dev/null; then
+            local version=$("$tool" --version 2>/dev/null | head -1)
+            echo "$tool: $version" | tee -a "$report_file"
+        else
+            echo -e "${RED}$tool: 未安装${NC}" | tee -a "$report_file"
+        fi
+    done
+    
+    # 4. OpenWrt编译特定依赖 (仅检查是否存在，不深度检查)
+    echo -e "\n${GREEN}4. OpenWrt编译环境状态${NC}" | tee -a "$report_file"
+    
+    if command -v ccache &> /dev/null; then
+        echo "CCACHE: 已安装。目录: $CCACHE_DIR" | tee -a "$report_file"
+    else
+        echo -e "${RED}CCACHE: 未安装。建议安装以加速编译。${NC}" | tee -a "$report_file"
+    fi
+    
+    # 5. 网络连接检查
+    echo -e "\n${GREEN}5. 网络连接检查${NC}" | tee -a "$report_file"
+    
+    local test_urls=("github.com" "git.openwrt.org")
+    for url in "${test_urls[@]}"; do
+        if ping -c 1 -W 2 "$url" &> /dev/null; then
+            echo "  $url: ${GREEN}可达${NC}" | tee -a "$report_file"
+        else
+            echo -e "${RED}  $url: 不可达${NC}" | tee -a "$report_file"
+        fi
+    done
+    
+    # 6. 警告和建议
+    echo -e "\n${GREEN}6. 诊断建议${NC}" | tee -a "$report_file"
+    
+    local available_kb=$(df -k "$BUILD_ROOT" | awk 'NR==2 {print $4}')
+    if [ "$available_kb" -lt 10485760 ]; then # 10GB
+        echo -e "${RED}⚠️  警告：磁盘空间不足，建议至少10GB${NC}" | tee -a "$report_file"
+    fi
+    
+    local mem_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+    if [ "$mem_kb" -lt 4000000 ]; then # 4GB
+        echo -e "${YELLOW}⚠️  注意：内存较少，建议增加内存或交换空间${NC}" | tee -a "$report_file"
+    fi
+    
+    echo -e "\n========================================" | tee -a "$report_file"
+    echo "诊断报告已保存到: $report_file"
+    
+    read -p "按任意键继续..."
 }
 
 
@@ -525,7 +815,6 @@ select_config_from_list() {
     fi
     return 1
 }
-
 
 # 1) 新建机型配置 (恢复功能)
 create_new_config() {
@@ -566,12 +855,10 @@ CUSTOM_INJECTIONS="none"
 ENABLE_QMODEM="$enable_qmodem"
 EOF
 
-    # 引导用户创建 .config 文件
     local user_cfg_path="$USER_CONFIG_DIR/$cfg_file_name"
     echo -e "${YELLOW}请创建或导入您的 OpenWrt .config 文件到: ${user_cfg_path}${NC}"
-    echo -e "${GREEN}✅ 配置 '$name' 已创建。${NC}"; sleep 2
+    echo -e "${GREEN}✅ 配置 '$name' 已创建。${NC}"; sleep 1
     
-    # 尝试打开编辑器编辑（如果安装了 nano）
     if command -v nano &> /dev/null; then
         read -p "是否立即使用 nano 编辑 .config 文件? (y/n): " edit_choice
         if [[ "$edit_choice" =~ ^[Yy]$ ]]; then
@@ -580,6 +867,7 @@ EOF
             generate_config_signature "$user_cfg_path"
         fi
     fi
+    read -p "按回车返回..."
 }
 
 # 2) 选择/编辑/删除配置 (恢复功能)
@@ -623,7 +911,6 @@ manage_configs_menu() {
                     load_config_vars "$config_name" VARS_DEL
                     
                     rm -f "$CONFIGS_DIR/$config_name.conf"
-                    # 可选：删除关联的 .config 文件
                     read -p "是否同时删除关联的 .config 文件 (${VARS_DEL[CONFIG_FILE_NAME]})? (y/n): " del_cfg_confirm
                     if [[ "$del_cfg_confirm" =~ ^[Yy]$ ]]; then
                          rm -f "$USER_CONFIG_DIR/${VARS_DEL[CONFIG_FILE_NAME]}"
@@ -641,7 +928,7 @@ manage_configs_menu() {
 }
 
 
-# 3) 编译固件 (简化为选择配置，然后执行编译)
+# 3) 启动单配置编译
 start_build_process() {
     clear; echo -e "## ${BLUE}🚀 启动单配置编译${NC}"
     local config_name=$(select_config_from_list)
@@ -650,15 +937,14 @@ start_build_process() {
     
     declare -A VARS
     if load_config_vars "$config_name" VARS; then
-        if validate_build_config VARS "$config_name"; then
+        if pre_build_checks && validate_build_config VARS "$config_name"; then
             execute_build "$config_name" VARS
         fi
     fi
 }
 
-# 4) 批量编译队列 (代码不变)
+# 4) 批量编译队列 (代码保留 V6.2.4 结构)
 build_queue_menu() {
-    # ... (代码不变) ...
     clear; echo -e "## ${BLUE}📦 批量编译队列${NC}"
     local configs=("$CONFIGS_DIR"/*.conf)
     if [ ${#configs[@]} -eq 0 ] || ([ ${#configs[@]} -eq 1 ] && [ ! -f "${configs[0]}" ]); then echo -e "${YELLOW}无配置。${NC}"; read -p "回车..."; return; fi
@@ -697,7 +983,11 @@ build_queue_menu() {
                      declare -A B_VARS
                      if load_config_vars "$q" B_VARS; then
                          echo -e "\n--- ${BLUE}[批处理] 开始编译 $q${NC} ---"
-                         execute_build "$q" B_VARS
+                         if validate_build_config B_VARS "$q"; then
+                             execute_build "$q" B_VARS
+                         else
+                             echo -e "${RED}❌ 配置 $q 校验失败，跳过。${NC}"
+                         fi
                      fi
                  }; done; read -p "批处理结束。" ;;
             R|r) return ;;
@@ -705,6 +995,12 @@ build_queue_menu() {
         esac
     done
 }
+
+# 5) CCACHE 状态/管理 (整合到 manage_compile_cache)
+ccache_menu() {
+    manage_compile_cache
+}
+
 
 # 6) 导出配置备份 (恢复功能)
 export_config_backup() {
@@ -715,13 +1011,14 @@ export_config_backup() {
 
     (
         cd "$BUILD_ROOT" || exit 1
+        # 备份核心配置文件和脚本
         zip -r "$archive_path" profiles user_configs custom_scripts 2>/dev/null
     )
     
     if [ -f "$archive_path" ]; then
         echo -e "${GREEN}✅ 备份成功！${NC}"
         echo "备份文件路径: $archive_path"
-        echo -e "备份内容: ${CONFIGS_DIR}, ${USER_CONFIG_DIR}, ${EXTRA_SCRIPT_DIR}"
+        echo "备份内容: profiles, user_configs, custom_scripts"
     else
         echo -e "${RED}❌ 备份失败，请检查 zip/权限。${NC}"
     fi
@@ -767,42 +1064,41 @@ import_config_backup() {
     read -p "按回车返回..."
 }
 
+# 8) 编译环境诊断工具 (新增功能)
+environment_diagnosis_menu() {
+    diagnose_build_environment
+}
+
 
 # 主菜单
 main_menu() {
     while true; do
         clear
         echo -e "====================================================="
-        echo -e "   🔥 ${GREEN}ImmortalWrt 固件编译管理脚本 V6.2.4${NC} 🔥"
-        echo -e "      (健壮性增强 | CCACHE: ${CCACHE_LIMIT} 上限)"
+        echo -e "   🔥 ${GREEN}ImmortalWrt 固件编译管理脚本 V6.2.5${NC} 🔥"
+        echo -e "      (智能诊断 | 实时进度 | CCACHE: ${CCACHE_LIMIT} 上限)"
         echo -e "====================================================="
-        echo "1) 🌟 新建机型配置 (Create New Configuration)"
-        echo "2) ⚙️  选择/编辑/删除配置 (Manage Configuration)"
-        echo "3) 🚀 启动单配置编译 (Start Build Process)"
-        echo "4) 📦 批量编译队列 (Build Queue)"
-        echo "5) 📊 CCACHE 状态/管理"
+        echo "1) 🌟 新建机型配置"
+        echo "2) ⚙️  配置管理 (编辑/删除)"
+        echo "3) 🚀 启动单配置编译"
+        echo "4) 📦 批量编译队列"
+        echo "5) 📊 CCACHE 及缓存管理"
         echo "6) 📤 导出配置备份"
         echo "7) 📥 导入配置备份"
+        echo "8) 🔬 编译环境诊断报告" # 新增
         echo -e "-----------------------------------------------------"
         
-        read -p "请选择功能 (1-7, 0/Q 退出): " choice
+        read -p "请选择功能 (1-8, 0/Q 退出): " choice
         
         case $choice in
             1) create_new_config ;;
             2) manage_configs_menu ;;
             3) start_build_process ;;
             4) build_queue_menu ;;
-            5) 
-                if command -v ccache &> /dev/null; then 
-                    ccache -s
-                    ccache -M "$CCACHE_LIMIT"
-                    echo -e "${GREEN}CCACHE 上限已设置为 ${CCACHE_LIMIT}${NC}"
-                else 
-                    echo -e "${RED}未安装 ccache${NC}"
-                fi
-                read -p "按回车返回..." ;;
+            5) manage_compile_cache ;;
             6) export_config_backup ;;
             7) import_config_backup ;;
+            8) diagnose_build_environment ;;
             0|Q|q) echo -e "${BLUE}退出脚本。${NC}"; break ;;
             *) echo -e "${RED}无效选择，请重新输入。${NC}"; sleep 1 ;;
         esac
