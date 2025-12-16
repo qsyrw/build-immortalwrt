@@ -746,7 +746,6 @@ execute_build() {
         fi
         # ----------------------------------------------------------------
         
-        
 # --- 4. 运行配置后自定义注入 (阶段 850) ---
         # 此阶段用于所有配置清理、补丁和修改 .config 的逻辑
         run_custom_injections "${VARS[CUSTOM_INJECTIONS]}" "850" "$CURRENT_SOURCE_DIR"
