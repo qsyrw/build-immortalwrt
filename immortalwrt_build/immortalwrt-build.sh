@@ -797,22 +797,28 @@ execute_build() {
         echo "最终运行 make defconfig 确保所有依赖正确..." | tee -a "$BUILD_LOG_PATH"
         make defconfig || { echo "❌ 错误: 最终 make defconfig 失败。"; exit 1; }
         
-        # [新增] 预下载步骤
-        echo "正在预下载源码包 (make download -j8)..." | tee -a "$BUILD_LOG_PATH"
-        # 使用 -j8 或更多线程进行并行下载，V=s 显示详细信息以便排查网络错误
-        make download -j8 || { 
-            echo "⚠️ 警告: 首次下载可能有部分失败，尝试使用单线程 V=s 补救..." | tee -a "$BUILD_LOG_PATH";
+        # ===================================================================
+        # 🔥 新增的并行下载步骤 (Make Download) 🔥
+        # ===================================================================
+
+        echo "正在预下载源码包 (make download -j$JOBS_N)..." | tee -a "$BUILD_LOG_PATH"
+        # 尝试并行下载，如果失败则尝试单线程下载作为备用方案
+        make download -j"$JOBS_N" || { 
+            echo "⚠️ 警告: 并行下载失败，尝试使用单线程 V=s 补救..." | tee -a "$BUILD_LOG_PATH";
             make download -j1 V=s; 
         }
         
-        # [可选] 检查下载的文件完整性 (查找小于 1k 的文件可能是下载失败的 HTML 错误页)
+        # 检查并清理损坏或不完整的下载文件 (<1KB 的文件通常是下载失败的HTML页面)
+        log "清理无效/损坏的下载文件..."
         find dl -size -1024c -exec ls -l {} \; -exec rm -f {} \;
+
+        # ===================================================================
 
         local CCACHE_SETTINGS=""
         
         # 核心编译步骤，使用 tee 保持日志输出和文件记录
         echo "开始构建固件 (make -j$JOBS_N V=s)..." | tee -a "$BUILD_LOG_PATH"
-        make -j"$JOBS_N" V=s $CCACHE_SETTINGS 2>&1 | tee -a "$BUILD_LOG_PATH"
+        make -j"$JOBS_N" V=s $CCACHE_SETTINGS 2>&1 | tee -a "$BUILD_LOG_PATH" 
         
         if [ ${PIPESTATUS[0]} -ne 0 ]; then
             echo -e "\n================== 编译失败 ❌ ==================" | tee -a "$BUILD_LOG_PATH"
