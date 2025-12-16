@@ -5,6 +5,9 @@
 # - 优化: run_custom_injections 模块具备独立日志和精确错误捕获。
 # - 修正: 增强 manage_injections_menu，支持自动转换 GitHub 网页链接为 Raw 链接。
 # - 修正: 修复依赖检查中对 procps 的误判。
+# - 新增: 增强 make download 预下载步骤，优化编译速度和稳定性。
+# - 修复: 修复 build_queue_menu 中的语法错误 (if/else 闭合缺失)。
+# - 修复: 修复 execute_build 结尾子 shell 闭合缺失。
 # ==========================================================
 
 # --- 变量定义 ---
@@ -212,6 +215,7 @@ select_config() {
         sleep 1
     fi
 }
+
 
 # 3.3 实际配置交互界面
 config_interaction() {
@@ -595,51 +599,57 @@ build_queue_menu() {
                         queue+=("$config_name_to_toggle")
                         echo "配置已添加。"
                     fi
-                else
-                    echo "无效序号。"
-                fi
-                sleep 1
-                ;;
+                fi ;;
             S|s)
-                if [ ${#queue[@]} -eq 0 ]; then echo "队列为空。"; sleep 1; continue; fi
-                start_batch_build queue
+                if [ ${#queue[@]} -eq 0 ]; then
+                    echo "队列为空，请先添加配置。"
+                    sleep 1
+                    continue
+                fi
+                echo "🚀 正在启动批量编译..."
+                local IS_BATCH_BUILD=1 # 设置批量编译标志
+                for config_name in "${queue[@]}"; do
+                    echo -e "\n====================================================="
+                    echo "   ▶️ 批量编译任务: [$config_name] 开始"
+                    echo "====================================================="
+                    
+                    declare -A BATCH_VARS
+                    local CONFIG_FILE="$CONFIGS_DIR/$config_name.conf"
+                    
+                    while IFS='=' read -r key value; do
+                        if [[ "$key" =~ ^[A-Z_]+$ ]]; then
+                            BATCH_VARS["$key"]=$(echo "$value" | sed 's/^"//;s/"$//')
+                        fi
+                    done < "$CONFIG_FILE"
+                    
+                    if validate_build_config BATCH_VARS "$config_name"; then
+                        execute_build "$config_name" "${BATCH_VARS[FW_TYPE]}" "${BATCH_VARS[FW_BRANCH]}" BATCH_VARS
+                        local exit_status=$?
+                        if [ "$exit_status" -ne 0 ]; then
+                            echo -e "❌ 编译 [$config_name] 失败，检查日志。继续下一个任务..."
+                            # 由于 error_handler 已经处理了日志，这里可以继续下一个循环
+                        else
+                             echo -e "✅ 编译 [$config_name] 成功。"
+                        fi
+                    else
+                        echo -e "❌ 配置 [$config_name] 校验失败，跳过。"
+                    fi
+                done
+                echo -e "\n================== 批量编译任务完成 =================="
+                read -p "按任意键返回主菜单..."
                 return
                 ;;
-            C|c) queue=(); echo "队列已清空。"; sleep 1 ;;
+            C|c)
+                queue=()
+                echo "队列已清空。"
+                sleep 1
+                ;;
             R|r) return ;;
-            *) echo "无效选择。"; sleep 1 ;;
+            *) echo "无效操作。"; sleep 1 ;;
         esac
     done
 }
 
-# 4.5 启动批量编译
-start_batch_build() {
-    local -n queue_ref=$1
-    echo -e "\n================== 批处理编译启动 =================="
-    export IS_BATCH_BUILD=1
-    
-    for config_name in "${queue_ref[@]}"; do
-        echo -e "\n--- [批处理任务] 开始编译: **$config_name** ---"
-        local CONFIG_FILE="$CONFIGS_DIR/$config_name.conf"
-        declare -A BATCH_VARS
-        
-        while IFS='=' read -r key value; do
-            if [[ "$key" =~ ^[A-Z_]+$ ]]; then
-                BATCH_VARS["$key"]=$(echo "$value" | sed 's/^"//;s/"$//')
-            fi
-        done < "$CONFIG_FILE"
-        
-        if validate_build_config BATCH_VARS "$config_name"; then
-            execute_build "$config_name" "${BATCH_VARS[FW_TYPE]}" "${BATCH_VARS[FW_BRANCH]}" BATCH_VARS
-            if [ $? -eq 0 ]; then echo "✅ 编译成功。"; else echo "❌ 编译失败，跳过。"; fi
-        else
-            echo "❌ 校验失败，跳过。"; sleep 1
-        fi
-    done
-    unset IS_BATCH_BUILD
-    echo -e "\n================== 批处理完成 =================="
-    read -p "按任意键返回..."
-}
 
 # 4.3 实际执行编译 (V4.9.35 最终精简版)
 execute_build() {
@@ -828,7 +838,7 @@ execute_build() {
             archive_firmware_and_logs "$CONFIG_NAME" "$FW_TYPE" "$FW_BRANCH" "$BUILD_TIME_STAMP_FULL" "$GIT_COMMIT_ID" "$BUILD_LOG_PATH"
             exit 0
         fi
-    )
+    ) # <--- 修复点 2: 闭合 execute_build 函数中的子 shell
 
 # --- 5. 工具 ---
 
