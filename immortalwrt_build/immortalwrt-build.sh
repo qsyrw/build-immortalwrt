@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================================
-# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.35 (最终稳定版)
+# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.35 (最终稳定版 - 已修复闭合错误)
 # - 优化: run_custom_injections 模块具备独立日志和精确错误捕获。
 # - 修正: 增强 manage_injections_menu，支持自动转换 GitHub 网页链接为 Raw 链接。
 # - 修正: 修复依赖检查中对 procps 的误判。
@@ -838,7 +838,7 @@ execute_build() {
             archive_firmware_and_logs "$CONFIG_NAME" "$FW_TYPE" "$FW_BRANCH" "$BUILD_TIME_STAMP_FULL" "$GIT_COMMIT_ID" "$BUILD_LOG_PATH"
             exit 0
         fi
-    ) # <--- 修复点 2: 闭合 execute_build 函数中的子 shell
+    ) # <--- 修复点: 闭合 execute_build 函数中的子 shell
 
 # --- 5. 工具 ---
 
