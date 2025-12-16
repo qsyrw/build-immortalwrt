@@ -1,13 +1,11 @@
 #!/bin/bash
 
 # ==========================================================
-# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.35 (最终稳定版 - 已修复闭合错误)
+# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V4.9.35 (最终稳定版)
 # - 优化: run_custom_injections 模块具备独立日志和精确错误捕获。
 # - 修正: 增强 manage_injections_menu，支持自动转换 GitHub 网页链接为 Raw 链接。
 # - 修正: 修复依赖检查中对 procps 的误判。
-# - 新增: 增强 make download 预下载步骤，优化编译速度和稳定性。
-# - 修复: 修复 build_queue_menu 中的语法错误 (if/else 闭合缺失)。
-# - 修复: 修复 execute_build 结尾子 shell 闭合缺失。
+# - 新增: execute_build 流程中嵌入 make download 步骤。
 # ==========================================================
 
 # --- 变量定义 ---
@@ -216,7 +214,6 @@ select_config() {
     fi
 }
 
-
 # 3.3 实际配置交互界面
 config_interaction() {
     local CONFIG_NAME="$1"
@@ -376,7 +373,7 @@ validate_build_config() {
         IFS=$'\n' read -rd '' -a injections <<< "$injections_array_string"
         
         for injection in "${injections[@]}"; do
-            if [[ -z "$injection" ]]; then continue; fi  # <--- 关键修正点！
+            if [[ -z "$injection" ]]; then continue; fi
             local script_path_url=$(echo "$injection" | awk '{print $1}')
             local full_script_path="$EXTRA_SCRIPT_DIR/$script_path_url"
             
@@ -595,8 +592,55 @@ build_queue_menu() {
                         done 
                         queue=("${new_queue[@]}")
                         echo "配置已移除。"
-             
+                    else
+                        queue+=("$config_name_to_toggle")
+                        echo "配置已添加。"
+                    fi
+                else
+                    echo "无效序号。"
+                fi
+                sleep 1
+                ;;
+            S|s)
+                if [ ${#queue[@]} -eq 0 ]; then echo "队列为空。"; sleep 1; continue; fi
+                start_batch_build queue
+                return
+                ;;
+            C|c) queue=(); echo "队列已清空。"; sleep 1 ;;
+            R|r) return ;;
+            *) echo "无效选择。"; sleep 1 ;;
+        esac
+    done
+}
 
+# 4.5 启动批量编译
+start_batch_build() {
+    local -n queue_ref=$1
+    echo -e "\n================== 批处理编译启动 =================="
+    export IS_BATCH_BUILD=1
+    
+    for config_name in "${queue_ref[@]}"; do
+        echo -e "\n--- [批处理任务] 开始编译: **$config_name** ---"
+        local CONFIG_FILE="$CONFIGS_DIR/$config_name.conf"
+        declare -A BATCH_VARS
+        
+        while IFS='=' read -r key value; do
+            if [[ "$key" =~ ^[A-Z_]+$ ]]; then
+                BATCH_VARS["$key"]=$(echo "$value" | sed 's/^"//;s/"$//')
+            fi
+        done < "$CONFIG_FILE"
+        
+        if validate_build_config BATCH_VARS "$config_name"; then
+            execute_build "$config_name" "${BATCH_VARS[FW_TYPE]}" "${BATCH_VARS[FW_BRANCH]}" BATCH_VARS
+            if [ $? -eq 0 ]; then echo "✅ 编译成功。"; else echo "❌ 编译失败，跳过。"; fi
+        else
+            echo "❌ 校验失败，跳过。"; sleep 1
+        fi
+    done
+    unset IS_BATCH_BUILD
+    echo -e "\n================== 批处理完成 =================="
+    read -p "按任意键返回..."
+}
 
 # 4.3 实际执行编译 (V4.9.35 最终精简版)
 execute_build() {
@@ -745,37 +789,36 @@ execute_build() {
             exit 1
         fi
         # ----------------------------------------------------------------
-        
-# --- 4. 运行配置后自定义注入 (阶段 850) ---
+
+        # --- 4. 运行配置后自定义注入 (阶段 850) ---
         # 此阶段用于所有配置清理、补丁和修改 .config 的逻辑
         run_custom_injections "${VARS[CUSTOM_INJECTIONS]}" "850" "$CURRENT_SOURCE_DIR"
         
-        echo -e "\n--- 开始编译 (线程: $JOBS_N) ---" | tee -a "$BUILD_LOG_PATH"
+        echo -e "\n--- 开始编译准备 (线程: $JOBS_N) ---" | tee -a "$BUILD_LOG_PATH"
         echo "最终运行 make defconfig 确保所有依赖正确..." | tee -a "$BUILD_LOG_PATH"
         make defconfig || { echo "❌ 错误: 最终 make defconfig 失败。"; exit 1; }
         
-        # ===================================================================
-        # 🔥 新增的并行下载步骤 (Make Download) 🔥
-        # ===================================================================
-
-        echo "正在预下载源码包 (make download -j$JOBS_N)..." | tee -a "$BUILD_LOG_PATH"
-        # 尝试并行下载，如果失败则尝试单线程下载作为备用方案
-        make download -j"$JOBS_N" || { 
-            echo "⚠️ 警告: 并行下载失败，尝试使用单线程 V=s 补救..." | tee -a "$BUILD_LOG_PATH";
-            make download -j1 V=s; 
-        }
+        # ----------------------------------------------------------------
+        # 🌟 新增：预先下载所有软件包 (make download)
+        # ----------------------------------------------------------------
+        echo -e "\n--- 🌐 预先下载所有软件包 (make download -j$JOBS_N) ---" | tee -a "$BUILD_LOG_PATH"
+        # 强制执行 make download，并将输出重定向到日志
+        make download -j"$JOBS_N" V=s 2>&1 | tee -a "$BUILD_LOG_PATH"
         
-        # 检查并清理损坏或不完整的下载文件 (<1KB 的文件通常是下载失败的HTML页面)
-        log "清理无效/损坏的下载文件..."
-        find dl -size -1024c -exec ls -l {} \; -exec rm -f {} \;
-
-        # ===================================================================
+        # 检查 make download 的退出状态
+        if [ ${PIPESTATUS[0]} -ne 0 ]; then
+            echo -e "\n🚨 **软件包下载失败**，终止编译。请检查网络连接。" | tee -a "$BUILD_LOG_PATH"
+            exit 1
+        else
+            echo "✅ 软件包下载完成。" | tee -a "$BUILD_LOG_PATH"
+        fi
+        # ----------------------------------------------------------------
 
         local CCACHE_SETTINGS=""
         
-        # 核心编译步骤，使用 tee 保持日志输出和文件记录
-        echo "开始构建固件 (make -j$JOBS_N V=s)..." | tee -a "$BUILD_LOG_PATH"
-        make -j"$JOBS_N" V=s $CCACHE_SETTINGS 2>&1 | tee -a "$BUILD_LOG_PATH" 
+        # 核心编译步骤
+        echo -e "\n--- 🚀 开始核心编译 (make -j$JOBS_N) ---" | tee -a "$BUILD_LOG_PATH"
+        make -j"$JOBS_N" V=s $CCACHE_SETTINGS 2>&1 | tee -a "$BUILD_LOG_PATH"
         
         if [ ${PIPESTATUS[0]} -ne 0 ]; then
             echo -e "\n================== 编译失败 ❌ ==================" | tee -a "$BUILD_LOG_PATH"
@@ -785,10 +828,15 @@ execute_build() {
             archive_firmware_and_logs "$CONFIG_NAME" "$FW_TYPE" "$FW_BRANCH" "$BUILD_TIME_STAMP_FULL" "$GIT_COMMIT_ID" "$BUILD_LOG_PATH"
             exit 0
         fi
-    ) # <--- 闭合 execute_build 函数中的子 shell
+    )
     
-    return $?
-} # <--- 闭合 execute_build 函数本身
+    local EXECUTE_STATUS=$?
+    if [ "$EXECUTE_STATUS" -ne 0 ]; then
+        error_handler "$EXECUTE_STATUS"
+        return 1
+    fi
+    return 0
+}
 
 # --- 5. 工具 ---
 
@@ -922,7 +970,7 @@ manage_injections_menu() {
                     local new_str=""; local first=true
                     for item in "${inj_array[@]}"; do
                         if $first; then new_str="$item"; first=false; else new_str="${new_str}##${item}"; fi
-                    done
+                    }
                     vars_array[CUSTOM_INJECTIONS]="$new_str"
                 fi ;;
             R|r) return ;;
