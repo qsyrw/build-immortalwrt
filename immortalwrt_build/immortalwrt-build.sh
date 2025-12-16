@@ -6,6 +6,7 @@
 # - 修正: 增强 manage_injections_menu，支持自动转换 GitHub 网页链接为 Raw 链接。
 # - 修正: 修复依赖检查中对 procps 的误判。
 # - 新增: execute_build 流程中嵌入 make download 步骤。
+# - 修正: 修复 manage_injections_menu 和 manage_plugins_menu 中的循环语法错误 (导致 973 行错误)。
 # ==========================================================
 
 # --- 变量定义 ---
@@ -795,6 +796,7 @@ execute_build() {
         run_custom_injections "${VARS[CUSTOM_INJECTIONS]}" "850" "$CURRENT_SOURCE_DIR"
         
         echo -e "\n--- 开始编译准备 (线程: $JOBS_N) ---" | tee -a "$BUILD_LOG_PATH"
+        
         echo "最终运行 make defconfig 确保所有依赖正确..." | tee -a "$BUILD_LOG_PATH"
         make defconfig || { echo "❌ 错误: 最终 make defconfig 失败。"; exit 1; }
         
@@ -813,7 +815,7 @@ execute_build() {
             echo "✅ 软件包下载完成。" | tee -a "$BUILD_LOG_PATH"
         fi
         # ----------------------------------------------------------------
-
+        
         local CCACHE_SETTINGS=""
         
         # 核心编译步骤
@@ -903,7 +905,7 @@ manage_plugins_menu() {
                     local new_str=""; local first=true
                     for item in "${plugins_array[@]}"; do
                         if $first; then new_str="$item"; first=false; else new_str="${new_str}##${item}"; fi
-                    done
+                    done # <--- 修正：这里是 'done'
                     vars_array[EXTRA_PLUGINS]="$new_str"
                 fi ;;
             R|r) return ;;
@@ -970,7 +972,7 @@ manage_injections_menu() {
                     local new_str=""; local first=true
                     for item in "${inj_array[@]}"; do
                         if $first; then new_str="$item"; first=false; else new_str="${new_str}##${item}"; fi
-                    }
+                    done # <--- 修正：这里是 'done'
                     vars_array[CUSTOM_INJECTIONS]="$new_str"
                 fi ;;
             R|r) return ;;
@@ -1036,7 +1038,7 @@ run_custom_injections() {
     echo -e "\n--- ⚙️ 开始自定义脚本注入 [阶段 $TARGET_STAGE] ---" | tee -a "$BUILD_LOG_PATH"
     
     for injection in "${injections[@]}"; do
-        if [[ -z "$injection" ]]; then continue; fi
+        if [[ -z "$injection" ]]; then continue; endif
         
         local script_name=$(echo "$injection" | awk '{print $1}')
         local stage=$(echo "$injection" | awk '{print $2}')
