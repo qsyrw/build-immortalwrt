@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ==========================================================
-# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V6.2.7
+# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V6.2.13 (Menu Logic Restore)
 # ----------------------------------------------------------
-# (全面增强：更智能的诊断、更健壮的流程、CCACHE 持久化管理)
+# (保留 V6.2.12 健壮解析 | 恢复用户偏好的菜单式编辑)
 # ==========================================================
 
 # --- 1. 颜色定义与基础变量 ---
@@ -14,7 +14,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # --- 版本控制和兼容性检查 ---
-SCRIPT_VERSION="6.2.7"
+SCRIPT_VERSION="6.2.13 (Menu Logic Restore)"
 MIN_BASH_VERSION=4
 
 # 核心构建根目录
@@ -81,7 +81,7 @@ monitor_progress_bar() {
     local total_targets=$1
     local log_file=$2
     
-    if [ "$total_targets" -le 0 ]; then return; fi
+    if [ "$total_targets" -le 0 ]; then return; fi 
     
     echo -e "\n--- ${GREEN}✅ 编译进度: 0%${NC} ---"
     
@@ -172,7 +172,7 @@ verify_config_signature() {
     if [ ! -f "$signature_file" ]; then
         echo -e "${YELLOW}⚠️  警告：配置文件没有签名文件，跳过签名校验${NC}"
         return 0
-    fi
+    }
     
     if ! command -v sha256sum &> /dev/null; then
         echo -e "${YELLOW}⚠️  警告：无法校验签名，sha256sum命令未找到${NC}"
@@ -269,22 +269,55 @@ get_config_summary() {
     local config_file="$CONFIGS_DIR/$config_name.conf"
     declare -A VARS
     if [ -f "$config_file" ]; then
-        while IFS='=' read -r k v; do [[ "$k" =~ ^[A-Z_]+$ ]] && VARS["$k"]=$(echo "$v" | sed 's/^"//;s/"$//'); done < "$config_file" 2>/dev/null
-        echo "${VARS[FW_TYPE]}/${VARS[FW_BRANCH]} - ${VARS[CONFIG_FILE_NAME]}"
+        # 使用 load_config_vars 函数来加载
+        load_config_vars "$config_name" VARS >/dev/null 2>&1
+        
+        local summary="${VARS[FW_TYPE]}/${VARS[FW_BRANCH]} - ${VARS[CONFIG_FILE_NAME]}"
+        if [[ "${VARS[EXTRA_PLUGINS]}" != "none" ]] && [[ -n "${VARS[EXTRA_PLUGINS]}" ]]; then
+             summary+=" [插件]"
+        fi
+        if [[ "${VARS[CUSTOM_INJECTIONS]}" != "none" ]] && [[ -n "${VARS[CUSTOM_INJECTIONS]}" ]]; then
+             summary+=" [注入]"
+        fi
+        echo "$summary"
     else
         echo "未找到配置"
     fi
 }
 
-# 辅助函数：加载配置变量
+# 辅助函数：加载配置变量 (健壮解析逻辑)
 load_config_vars() {
     local config_name="$1"
     local -n VARS=$2
     local config_file="$CONFIGS_DIR/$config_name.conf"
+    
+    # 初始化所有变量为空，防止残留
+    for k in "${CONFIG_VAR_NAMES[@]}"; do
+        VARS["$k"]=""
+    done
+
     if [ -f "$config_file" ]; then
-        while IFS='=' read -r k v; do 
-            [[ "$k" =~ ^[A-Z_]+$ ]] && VARS["$k"]=$(echo "$v" | sed 's/^"//;s/"$//'); 
+        # 使用 while read 结合 Bash 正则表达式来健壮地读取变量，处理超长行和复杂内容
+        while IFS= read -r line; do
+            # 匹配一行: ^(变量名)="内容"$
+            if [[ "$line" =~ ^([A-Z_]+)=\"(.*)\"$ ]]; then
+                local k="${BASH_REMATCH[1]}"
+                local v="${BASH_REMATCH[2]}"
+                VARS["$k"]="$v"
+            fi
         done < "$config_file"
+
+        # 校验关键变量是否加载成功
+        if [ -z "${VARS[FW_TYPE]}" ] || [ -z "${VARS[FW_BRANCH]}" ]; then
+             echo "错误：配置文件 $config_file 加载关键变量失败，请检查内容是否包含不可见字符或换行符问题。" >&2
+             return 1
+        fi
+        
+        # 确保所有变量都至少有一个值，避免空字符串
+        : ${VARS[EXTRA_PLUGINS]:="none"}
+        : ${VARS[CUSTOM_INJECTIONS]:="none"}
+        : ${VARS[ENABLE_QMODEM]:="n"}
+
         return 0
     fi
     return 1
@@ -296,15 +329,17 @@ run_custom_injections() {
     local stage="$2"
     local source_dir="$3"
     
+    # 只要 injections 字段不为 "none" 就尝试运行
     if [[ "$injections" == "none" ]]; then 
         return 0
     fi
 
     local script_path="$EXTRA_SCRIPT_DIR/build_injection_${stage}.sh"
     if [ -f "$script_path" ]; then
-        echo -e "\n--- ${BLUE}⚙️  执行自定义注入脚本 (阶段 $stage)${NC} ---" | tee -a "$BUILD_LOG_PATH"
+        echo -e "\n--- ${BLUE}⚙️  执行自定义注入脚本 (阶段 $stage)${NC} ($injections)" | tee -a "$BUILD_LOG_PATH"
         (
             cd "$source_dir" || exit 1
+            # 允许脚本注入执行
             bash "$script_path" 2>&1 | tee -a "$BUILD_LOG_PATH"
         )
     fi
@@ -322,28 +357,21 @@ analyze_build_failure() {
     # 1. 磁盘空间不足
     if echo "$error_lines" | grep -q "No space left on device\|disk full"; then
         echo -e "${YELLOW}⚠️  错误类型: 磁盘空间不足${NC}"
-        echo "解决方案:"
-        echo "  1. 清理磁盘空间: df -h"
-        echo "  2. 删除旧的编译输出: rm -rf $BUILD_ROOT/output/*"
-        echo "  3. 清理CCACHE缓存: ccache -C"
+        echo "解决方案: 1. 清理磁盘空间; 2. 删除旧的编译输出; 3. 清理CCACHE缓存"
         error_found=1
     fi
     
     # 2. 内存不足
     if echo "$error_lines" | grep -q "Killed\|out of memory\|Cannot allocate memory"; then
         echo -e "${YELLOW}⚠️  错误类型: 内存不足${NC}"
-        echo "解决方案:"
-        echo "  1. 减少编译作业数"
-        echo "  2. 增加交换空间"
+        echo "解决方案: 1. 减少编译作业数; 2. 增加交换空间"
         error_found=1
     fi
     
     # 3. 网络下载失败
     if echo "$error_lines" | grep -q "Connection refused\|Failed to connect\|404 Not Found\|Could not resolve host"; then
         echo -e "${YELLOW}⚠️  错误类型: 网络连接问题${NC}"
-        echo "解决方案:"
-        echo "  1. 检查网络连接和代理设置"
-        echo "  2. 尝试手动下载缺失文件"
+        echo "解决方案: 检查网络连接和代理设置"
         error_found=1
     fi
     
@@ -351,8 +379,6 @@ analyze_build_failure() {
     if echo "$error_lines" | grep -q "No such file or directory\|command not found\|未找到命令"; then
         echo -e "${YELLOW}⚠️  错误类型: 依赖缺失${NC}"
         echo "解决方案: 安装缺失的依赖包"
-        local missing_cmd=$(echo "$error_lines" | grep -o "command not found: [^ ]*" | head -1 | sed 's/command not found: //')
-        if [ -n "$missing_cmd" ]; then echo "  可能缺失的命令: $missing_cmd"; fi
         error_found=1
     fi
     
@@ -396,6 +422,7 @@ analyze_build_failure() {
     
     return 0
 }
+
 
 # --- 3. 核心编译流程函数 ---
 
@@ -615,6 +642,22 @@ confirm_build_settings() {
     echo "固件类型: ${VARS[FW_TYPE]}"
     echo "仓库分支: ${VARS[FW_BRANCH]}"
     echo "配置文件: ${VARS[CONFIG_FILE_NAME]}"
+
+    local plugins_summary="N/A (请使用 'make menuconfig' 添加插件)"
+    if [[ "${VARS[EXTRA_PLUGINS]}" == "none" ]]; then
+        plugins_summary="none"
+    elif [[ -n "${VARS[EXTRA_PLUGINS]}" ]]; then
+         # 检查用户提供的插件内容是否是脚本预期格式（逗号分隔的包名）
+         if echo "${VARS[EXTRA_PLUGINS]}" | grep -q "git clone\|##"; then
+              plugins_summary="${RED}非标准内容${NC} (请使用脚本注入功能)"
+         else
+              plugins_summary="${GREEN}已启用${NC}: ${VARS[EXTRA_PLUGINS]}"
+         fi
+    fi
+
+    echo "额外插件: $plugins_summary"
+    echo "脚本注入: ${VARS[CUSTOM_INJECTIONS]}"
+    echo "QModem: ${VARS[ENABLE_QMODEM]}"
     echo "编译作业: $JOBS_N"
     echo "缓存限制: $CCACHE_LIMIT"
     echo "========================================"
@@ -716,8 +759,10 @@ execute_build() {
         export PATH="/usr/lib/ccache:$PATH"
         ccache -z 2>/dev/null
         
+        # 阶段 100: 在 feeds 更新前
         run_custom_injections "${VARS[CUSTOM_INJECTIONS]}" "100" "$CURRENT_SOURCE_DIR"
         
+        # QModem 注入
         if [[ "${VARS[ENABLE_QMODEM]}" == "y" ]]; then
              if ! grep -q "qmodem" feeds.conf.default; then 
                  echo 'src-git qmodem https://github.com/FUjr/QModem.git;main' >> feeds.conf.default
@@ -738,11 +783,40 @@ execute_build() {
         fi
 
         cp "$src_cfg" .config
+        # 第一次 defconfig: 应用目标和基本设置
         make defconfig 2>&1 | tee -a "$BUILD_LOG_PATH" || { 
-            echo -e "${RED}make defconfig 失败${NC}" | tee -a "$BUILD_LOG_PATH"
+            echo -e "${RED}make defconfig 失败 (初次)${NC}" | tee -a "$BUILD_LOG_PATH"
             exit 1
         }
         
+        # === 处理额外插件 ===
+        if [[ "${VARS[EXTRA_PLUGINS]}" != "none" ]] && [[ -n "${VARS[EXTRA_PLUGINS]}" ]]; then
+            # 警告：这里假设 EXTRA_PLUGINS 已经是逗号分隔的包名
+            if ! echo "${VARS[EXTRA_PLUGINS]}" | grep -q "git clone\|##"; then
+                echo -e "\n--- ${BLUE}⚙️  注入额外插件: ${VARS[EXTRA_PLUGINS]}${NC} ---" | tee -a "$BUILD_LOG_PATH"
+                local plugin
+                IFS=',' read -ra PLUGINS_ARRAY <<< "${VARS[EXTRA_PLUGINS]}"
+                for plugin in "${PLUGINS_ARRAY[@]}"; do
+                    plugin=$(echo "$plugin" | xargs) # 去除空格
+                    if [ -n "$plugin" ]; then
+                        echo "CONFIG_PACKAGE_$plugin=y" >> .config
+                        echo "  -> 添加 CONFIG_PACKAGE_$plugin=y" | tee -a "$BUILD_LOG_PATH"
+                    fi
+                done
+                
+                # 第二次 defconfig: 应用额外插件
+                echo -e "\n--- ${BLUE}二次 make defconfig (应用插件)${NC} ---" | tee -a "$BUILD_LOG_PATH"
+                make defconfig 2>&1 | tee -a "$BUILD_LOG_PATH" || { 
+                    echo -e "${RED}make defconfig 失败 (二次)${NC}" | tee -a "$BUILD_LOG_PATH"
+                    exit 1
+                }
+            else
+                echo -e "${YELLOW}⚠️  警告: EXTRA_PLUGINS 格式错误，跳过插件注入。请使用 CUSTOM_INJECTIONS。${NC}" | tee -a "$BUILD_LOG_PATH"
+            fi
+        fi
+        # ====================
+
+        # 阶段 850: 下载依赖前
         run_custom_injections "${VARS[CUSTOM_INJECTIONS]}" "850" "$CURRENT_SOURCE_DIR"
         
         local download_phase_jobs=$((JOBS_N > 8 ? 8 : JOBS_N))
@@ -756,7 +830,7 @@ execute_build() {
         
         echo -e "\n--- ${BLUE}🚀 开始编译 (make -j$JOBS_N)${NC} ---" | tee -a "$BUILD_LOG_PATH"
         
-        # 目标计数 (健壮性改进)
+        # 目标计数
         local total_targets=$(make -n V=s 2>&1 | grep -E "make\[[0-9]+\]: Entering directory.*package" | wc -l 2>/dev/null || echo 0)
         if [ "$total_targets" -eq 0 ]; then 
              echo -e "${YELLOW}⚠️  警告：无法精确统计目标，使用保守估计...${NC}" | tee -a "$BUILD_LOG_PATH"
@@ -773,7 +847,6 @@ execute_build() {
         MAKE_RET=$?
         
         if [ "$PROGRESS_PID" -ne 0 ]; then 
-            # 使用双引号增强 kill 和 wait 的健壮性
             kill "$PROGRESS_PID" 2>/dev/null
             wait "$PROGRESS_PID" 2>/dev/null
         fi
@@ -795,7 +868,6 @@ execute_build() {
         echo -e "\n${GREEN}✅ 编译成功！总耗时: $DURATION_STR${NC}"
         
         generate_build_summary "$config_name" "$DURATION_STR" "$BUILD_LOG_PATH" "$FIRMWARE_DIR"
-        
         archive_build_artifacts "$config_name" "$FIRMWARE_DIR" "$BUILD_LOG_PATH" "$DURATION_STR"
 
         read -p "编译完成。按回车返回..."
@@ -976,30 +1048,179 @@ diagnose_build_environment() {
     read -p "按任意键继续..."
 }
 
-# --- 5. 菜单与流程控制 (恢复完整功能) ---
+# --- 5. 菜单与流程控制 ---
 
 # 统一选择配置的函数
 select_config_from_list() {
     local configs=("$CONFIGS_DIR"/*.conf)
     if [ ${#configs[@]} -eq 0 ] || ([ ${#configs[@]} -eq 1 ] && [ ! -f "${configs[0]}" ]); then 
-        echo -e "${YELLOW}无配置可操作。${NC}"
+        echo -e "${YELLOW}无可用配置。${NC}"
         return 1
     fi
     
     local i=1; local files=();
+    echo "-----------------------------------------------------"
     for file in "${configs[@]}"; do
         local fn=$(basename "$file" .conf)
-        echo "$i) $fn ($(get_config_summary "$fn"))"
+        # 此处调用 get_config_summary 获取配置摘要
+        local summary=$(get_config_summary "$fn")
+        # 修复列表仅显示名称的问题，确保即使摘要为空也会显示配置名
+        if [[ -n "$summary" ]]; then
+            echo "$i) ${GREEN}$fn${NC} ($summary)"
+        else
+             echo "$i) ${GREEN}$fn${NC}"
+        fi
         files[i]="$fn"; i=$((i+1))
     done
+    echo "-----------------------------------------------------"
     
-    read -p "选择序号 [1-$((i-1))]: " c
+    read -p "请选择配置序号 [1-$((i-1))]: " c
     if [[ "$c" =~ ^[0-9]+$ ]] && [ "$c" -ge 1 ] && [ "$c" -lt "$i" ]; then
         echo "${files[$c]}" # 返回选中的配置名
         return 0
     fi
+    echo -e "${RED}无效的选择或已取消。${NC}"
     return 1
 }
+
+# 恢复用户偏好的菜单式编辑配置函数 (核心修改点)
+manage_config_vars_menu() {
+    local config_name="$1"
+    local config_file="$CONFIGS_DIR/$config_name.conf"
+    
+    # 使用健壮解析器加载配置
+    declare -A VARS
+    if ! load_config_vars "$config_name" VARS; then 
+        read -p "配置加载失败，按回车返回..."
+        return
+    fi
+    
+    local dirty=0 # 标记是否进行了修改
+    
+    while true; do
+        clear
+        echo -e "====================================================="
+        echo -e "   📝 Edit 配置: ${GREEN}$config_name${NC}"
+        echo -e "  (请确保在 $USER_CONFIG_DIR 提供了配置好的 .config 文件)"
+        echo -e "====================================================="
+        
+        # 动态计算插件和注入条目数（兼容错误格式和正确格式）
+        local plugins_count=0
+        if [[ "${VARS[EXTRA_PLUGINS]}" != "none" ]] && [[ -n "${VARS[EXTRA_PLUGINS]}" ]]; then
+            # 兼容非标准格式的简单计数
+            if echo "${VARS[EXTRA_PLUGINS]}" | grep -q "git clone\|##"; then
+                plugins_count=$(echo "${VARS[EXTRA_PLUGINS]}" | awk -F'##' '{print NF}')
+            else
+                # 否则使用逗号分隔计数
+                plugins_count=$(echo "${VARS[EXTRA_PLUGINS]}" | awk -F',' '{print NF}')
+            fi
+        fi
+        
+        local injections_count=0
+        if [[ "${VARS[CUSTOM_INJECTIONS]}" != "none" ]] && [[ -n "${VARS[CUSTOM_INJECTIONS]}" ]]; then
+            # 使用逗号分隔计数
+            injections_count=$(echo "${VARS[CUSTOM_INJECTIONS]}" | awk -F',' '{print NF}')
+        fi
+        
+        # 显示状态
+        local qmodem_status="[${RED}N${NC}]"
+        if [[ "${VARS[ENABLE_QMODEM]}" == "y" ]]; then qmodem_status="[${GREEN}Y${NC}]"; fi
+        
+        echo "1. 固件类型/分支: ${VARS[FW_TYPE]} / ${VARS[FW_BRANCH]}"
+        echo "2. 配置 (config) 文件名: ${VARS[CONFIG_FILE_NAME]}"
+        echo "3. 🧩 额外插件列表 (${plugins_count} 条): ${VARS[EXTRA_PLUGINS]}"
+        echo "4. ⚙️ 脚本注入描述 (${injections_count} 条): ${VARS[CUSTOM_INJECTIONS]}"
+        echo "5. $qmodem_status 内置 Qmodem"
+        echo "6. 仓库 URL: ${VARS[REPO_URL]}"
+        echo "7. 检查配置文件的位置和名称"
+        echo "-----------------------------------------------------"
+        echo "S) 保存配置并返回 | R) 放弃修改并返回"
+        read -p "请选择要修改的项 (1-7, S/R): " edit_choice
+        
+        case $edit_choice in
+            1) 
+                read -p "新类型 (i: immortalwrt, o: openwrt, 当前 ${VARS[FW_TYPE]}): " new_type_choice
+                local new_fw_type="${VARS[FW_TYPE]}"
+                if [[ "$new_type_choice" =~ ^[Ii]$ ]]; then new_fw_type="immortalwrt"; fi
+                if [[ "$new_type_choice" =~ ^[Oo]$ ]]; then new_fw_type="openwrt"; fi
+                VARS[FW_TYPE]="$new_fw_type"
+                
+                read -p "新分支名称 (当前 ${VARS[FW_BRANCH]}): " new_branch_input
+                VARS[FW_BRANCH]="${new_branch_input:-${VARS[FW_BRANCH]}}"
+                dirty=1
+                ;;
+            2)
+                read -p "新 .config 文件名 (当前 ${VARS[CONFIG_FILE_NAME]}): " new_cfg_file
+                if [[ -n "$new_cfg_file" ]]; then
+                    VARS[CONFIG_FILE_NAME]="$new_cfg_file"
+                    dirty=1
+                fi
+                ;;
+            3)
+                echo -e "${YELLOW}当前插件列表 (逗号分隔的包名，或 'none'): ${VARS[EXTRA_PLUGINS]}${NC}"
+                read -p "输入新的插件列表: " new_plugins
+                if [[ -n "$new_plugins" ]]; then
+                    VARS[EXTRA_PLUGINS]="$new_plugins"
+                    dirty=1
+                fi
+                ;;
+            4)
+                echo -e "${YELLOW}当前注入描述 (例如: custom_repo,patch1,none): ${VARS[CUSTOM_INJECTIONS]}${NC}"
+                read -p "输入新的注入描述: " new_injections
+                if [[ -n "$new_injections" ]]; then
+                    VARS[CUSTOM_INJECTIONS]="$new_injections"
+                    dirty=1
+                fi
+                ;;
+            5)
+                read -p "启用 Qmodem (y/n, 当前 ${VARS[ENABLE_QMODEM]}): " new_qmodem_choice
+                local new_qmodem="${VARS[ENABLE_QMODEM]}"
+                if [[ "$new_qmodem_choice" =~ ^[Yy]$ ]]; then new_qmodem="y"; fi
+                if [[ "$new_qmodem_choice" =~ ^[Nn]$ ]]; then new_qmodem="n"; fi
+                if [[ "$new_qmodem" != "${VARS[ENABLE_QMODEM]}" ]]; then dirty=1; fi
+                VARS[ENABLE_QMODEM]="$new_qmodem"
+                ;;
+            6)
+                read -p "新仓库 URL (当前 ${VARS[REPO_URL]}): " new_repo_url
+                if [[ -n "$new_repo_url" ]]; then
+                    VARS[REPO_URL]="$new_repo_url"
+                    dirty=1
+                fi
+                ;;
+            7)
+                echo -e "\n${BLUE}配置文件路径:${NC} $USER_CONFIG_DIR/${VARS[CONFIG_FILE_NAME]}"
+                read -p "按回车返回..."
+                ;;
+            S|s) 
+                # 保存并退出
+                cat > "$config_file" << EOF
+FW_TYPE="${VARS[FW_TYPE]}"
+REPO_URL="${VARS[REPO_URL]}"
+FW_BRANCH="${VARS[FW_BRANCH]}"
+CONFIG_FILE_NAME="${VARS[CONFIG_FILE_NAME]}"
+EXTRA_PLUGINS="${VARS[EXTRA_PLUGINS]}"
+CUSTOM_INJECTIONS="${VARS[CUSTOM_INJECTIONS]}"
+ENABLE_QMODEM="${VARS[ENABLE_QMODEM]}"
+EOF
+                echo -e "${GREEN}✅ 配置 '$config_name' 已保存。${NC}"
+                read -p "按回车返回..."
+                return 0
+                ;;
+            R|r)
+                if [ "$dirty" -eq 1 ]; then
+                    read -p "${YELLOW}⚠️  配置已被修改，确定放弃更改吗？(y/n): ${NC}" confirm_discard
+                    if [[ "$confirm_discard" =~ ^[Yy]$ ]]; then
+                        echo -e "${YELLOW}更改已放弃。${NC}"; return 0
+                    fi
+                else
+                    return 0
+                fi
+                ;;
+            *) echo -e "${RED}无效选择。${NC}"; sleep 1 ;;
+        esac
+    done
+}
+
 
 # 1) 新建机型配置
 create_new_config() {
@@ -1015,9 +1236,7 @@ create_new_config() {
     if [[ "$type_choice" =~ ^[Oo]$ ]]; then fw_type="openwrt"; fi
     
     read -p "请输入仓库 URL (默认: https://github.com/immortalwrt/immortalwrt.git): " repo_url
-    if [[ -z "$repo_url" ]]; then 
-        repo_url="https://github.com/immortalwrt/immortalwrt.git"
-    fi
+    if [[ -z "$repo_url" ]]; then repo_url="https://github.com/immortalwrt/immortalwrt.git"; fi
 
     read -p "请输入分支名称 (默认: openwrt-21.02): " branch
     if [[ -z "$branch" ]]; then branch="openwrt-21.02"; fi
@@ -1025,6 +1244,16 @@ create_new_config() {
     read -p "请输入配置 .config 文件名 (例如: $name.config): " cfg_file_name
     if [[ -z "$cfg_file_name" ]]; then cfg_file_name="$name.config"; fi
     
+    # 额外插件
+    echo -e "\n${YELLOW}额外插件提示: 逗号分隔的 OpenWrt 包名 (默认: none)${NC}"
+    read -p "额外插件 (EXTRA_PLUGINS): " extra_plugins
+    if [[ -z "$extra_plugins" ]]; then extra_plugins="none"; fi
+
+    # 脚本注入
+    echo -e "${YELLOW}脚本注入提示: 描述性文字 (默认: none)${NC}"
+    read -p "自定义脚本注入 (CUSTOM_INJECTIONS): " custom_injections
+    if [[ -z "$custom_injections" ]]; then custom_injections="none"; fi
+
     read -p "是否启用 QModem (y/n, 默认n): " qmodem_choice
     local enable_qmodem="n"
     if [[ "$qmodem_choice" =~ ^[Yy]$ ]]; then enable_qmodem="y"; fi
@@ -1035,8 +1264,8 @@ FW_TYPE="$fw_type"
 REPO_URL="$repo_url"
 FW_BRANCH="$branch"
 CONFIG_FILE_NAME="$cfg_file_name"
-EXTRA_PLUGINS="none"
-CUSTOM_INJECTIONS="none"
+EXTRA_PLUGINS="$extra_plugins"
+CUSTOM_INJECTIONS="$custom_injections"
 ENABLE_QMODEM="$enable_qmodem"
 EOF
 
@@ -1069,18 +1298,14 @@ manage_configs_menu() {
         if [ $? -ne 0 ]; then read -p "按回车返回..."; return; fi
 
         echo -e "\n选中配置: ${GREEN}$config_name${NC}"
-        echo "A) 编辑配置 (.conf) | B) 编辑 .config 文件 | C) 删除配置 | R) 返回"
-        read -p "操作选择: " op_choice
+        echo "1) ✏️  编辑配置 (.conf) | 2) ⚙️  编辑 .config 文件 | 3) 🗑️  删除配置 | 4) 返回"
+        read -p "操作选择 (1-4): " op_choice
 
         case $op_choice in
-            A|a) # 编辑 .conf
-                if command -v nano &> /dev/null; then
-                    nano "$CONFIGS_DIR/$config_name.conf"
-                else
-                    echo -e "${RED}未找到 nano，请手动编辑: $CONFIGS_DIR/$config_name.conf${NC}"
-                fi
+            1) # 菜单式编辑 .conf
+                manage_config_vars_menu "$config_name"
                 ;;
-            B|b) # 编辑 .config
+            2) # 编辑 .config
                 declare -A VARS
                 if load_config_vars "$config_name" VARS; then
                     local cfg_path="$USER_CONFIG_DIR/${VARS[CONFIG_FILE_NAME]}"
@@ -1093,8 +1318,9 @@ manage_configs_menu() {
                         echo -e "${RED}未找到 nano，请手动编辑: $cfg_path${NC}"
                     fi
                 fi
+                read -p "按回车返回..."
                 ;;
-            C|c) # 删除配置
+            3) # 删除配置
                 read -p "${RED}警告：确认删除配置 $config_name 及其 .conf 文件? (y/n): ${NC}" del_confirm
                 if [[ "$del_confirm" =~ ^[Yy]$ ]]; then
                     declare -A VARS_DEL
@@ -1107,13 +1333,13 @@ manage_configs_menu() {
                          rm -f "$USER_CONFIG_DIR/${VARS_DEL[CONFIG_FILE_NAME]}.sig"
                     fi
                     
-                    echo -e "${GREEN}✅ 配置 $config_name 已删除。${NC}"
+                    echo -e "${GREEN}✅ 配置 $config_name$ 已删除。${NC}"
                 fi
+                read -p "按回车返回..."
                 ;;
-            R|r) return ;;
+            4) return ;;
             *) echo -e "${RED}无效选择。${NC}" ;;
         esac
-        sleep 1
     done
 }
 
@@ -1122,13 +1348,37 @@ start_build_process() {
     clear; echo -e "## ${BLUE}🚀 启动单配置编译${NC}"
     local config_name=$(select_config_from_list)
     
-    if [ $? -ne 0 ]; then read -p "按回车返回..."; return; fi
+    if [ $? -ne 0 ]; then read -p "按回车返回..."; return; fi 
     
     declare -A VARS
     if load_config_vars "$config_name" VARS; then
-        if pre_build_checks && validate_build_config VARS "$config_name"; then
-            execute_build "$config_name" VARS
+        
+        # ⚠️ 修复用户配置中的错误插件格式
+        if echo "${VARS[EXTRA_PLUGINS]}" | grep -q "git clone\|##"; then
+            echo -e "${RED}🚨 错误警告: ${NC}配置 ${config_name} 的 'EXTRA_PLUGINS' 字段包含非标准内容 (如 git clone 或 ##)。"
+            echo -e "  该字段**仅**用于逗号分隔的 OpenWrt 包名 (如 luci-app-ssr-plus)。"
+            echo -e "  外部仓库克隆/Patch 应使用 ${YELLOW}CUSTOM_INJECTIONS${NC} 功能。"
+            read -p "是否忽略此错误并继续，或按 Ctrl+C 退出脚本进行修复? (y/n): " continue_anyway
+            if [[ "$continue_anyway" != "y" ]]; then
+                 echo -e "${YELLOW}已取消编译。请修改 $CONFIGS_DIR/$config_name.conf${NC}"
+                 read -p "按回车返回主菜单..."
+                 return
+            fi
         fi
+
+        if ! pre_build_checks; then
+            echo -e "${RED}❌ 环境检查失败，请根据提示解决问题。${NC}"
+            read -p "按回车返回主菜单..."
+            return
+        fi
+        
+        if ! validate_build_config VARS "$config_name"; then
+            echo -e "${RED}❌ 配置校验失败，请根据提示修复配置。${NC}"
+            read -p "按回车返回主菜单..."
+            return
+        fi
+
+        execute_build "$config_name" VARS
     fi
 }
 
@@ -1149,7 +1399,7 @@ build_queue_menu() {
             local mk=" "; 
             for item in "${queue[@]}"; do [[ "$item" == "$fn" ]] && { mk="${GREEN}✅${NC}"; break; }; done
             
-            echo "$i) $mk $fn"; files[i]="$fn"; i=$((i+1))
+            echo "$i) $mk $fn ($(get_config_summary "$fn"))"; files[i]="$fn"; i=$((i+1))
         done
         echo "A) 切换选择  S) 开始  R) 返回"
         read -p "选择: " c
@@ -1179,11 +1429,18 @@ build_queue_menu() {
                     [[ -n "$q" ]] && {
                         declare -A B_VARS
                         if load_config_vars "$q" B_VARS; then
+                             # 批量编译时，强制跳过非标准 EXTRA_PLUGINS 的配置
+                            if echo "${B_VARS[EXTRA_PLUGINS]}" | grep -q "git clone\|##"; then
+                                echo -e "${RED}❌ 配置 $q 的 EXTRA_PLUGINS 格式错误，跳过批量编译。${NC}"
+                                continue
+                            fi
+
                             echo -e "\n--- ${BLUE}[批处理] 开始编译 $q${NC} ---"
                             if validate_build_config B_VARS "$q"; then
                                 execute_build "$q" B_VARS
                             else
                                 echo -e "${RED}❌ 配置 $q 校验失败，跳过。${NC}"
+                                read -p "按回车继续下一个配置..."
                             fi
                         fi
                     }
@@ -1265,11 +1522,11 @@ main_menu() {
         clear
         echo -e "====================================================="
         echo -e "   🔥 ${GREEN}ImmortalWrt 固件编译管理脚本 V${SCRIPT_VERSION}${NC} 🔥"
-        echo -e "      (智能诊断 | 实时进度 | CCACHE: ${CCACHE_LIMIT} 上限)"
+        echo -e "      (功能完整 | 交互式配置 | 智能诊断)"
         echo -e "====================================================="
         show_system_info
         echo -e "-----------------------------------------------------"
-        echo "1) 🌟 新建机型配置"
+        echo "1) 🌟 新建机型配置 (含插件/注入)"
         echo "2) ⚙️  配置管理 (编辑/删除)"
         echo "3) 🚀 启动单配置编译"
         echo "4) 📦 批量编译队列"
@@ -1319,7 +1576,6 @@ cleanup_on_exit() {
     
     echo -e "${GREEN}✅ 清理完成${NC}"
 }
-
 # 设置退出陷阱
 trap cleanup_on_exit EXIT INT TERM
 
