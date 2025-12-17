@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ==========================================================
-# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V6.2.13 (Menu Logic Restore)
+# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V6.2.14 (Syntax Fix & Menu Logic Restore)
 # ----------------------------------------------------------
-# (保留 V6.2.12 健壮解析 | 恢复用户偏好的菜单式编辑)
+# (修复 V6.2.13 中 verify_config_signature 函数的语法错误)
 # ==========================================================
 
 # --- 1. 颜色定义与基础变量 ---
@@ -14,7 +14,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # --- 版本控制和兼容性检查 ---
-SCRIPT_VERSION="6.2.13 (Menu Logic Restore)"
+SCRIPT_VERSION="6.2.14 (Syntax Fix)"
 MIN_BASH_VERSION=4
 
 # 核心构建根目录
@@ -164,7 +164,7 @@ generate_config_signature() {
     fi
 }
 
-# 验证签名
+# 验证签名 (已修复语法错误)
 verify_config_signature() {
     local config_file="$1"
     local signature_file="${config_file}.sig"
@@ -172,7 +172,7 @@ verify_config_signature() {
     if [ ! -f "$signature_file" ]; then
         echo -e "${YELLOW}⚠️  警告：配置文件没有签名文件，跳过签名校验${NC}"
         return 0
-    }
+    fi # <--- 修复了 V6.2.13 中的语法错误
     
     if ! command -v sha256sum &> /dev/null; then
         echo -e "${YELLOW}⚠️  警告：无法校验签名，sha256sum命令未找到${NC}"
@@ -1549,7 +1549,7 @@ main_menu() {
             8) diagnose_build_environment ;;
             0|Q|q) echo -e "${BLUE}退出脚本。${NC}"; break ;;
             *) echo -e "${RED}无效选择，请重新输入。${NC}"; sleep 1 ;;
-        esac
+        esase
     done
 }
 
