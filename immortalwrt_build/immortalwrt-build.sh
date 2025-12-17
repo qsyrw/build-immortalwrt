@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ==========================================================
-# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V6.2.14 (Syntax Fix & Menu Logic Restore)
+# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V6.2.15 (Final Syntax Fix)
 # ----------------------------------------------------------
-# (修复 V6.2.13 中 verify_config_signature 函数的语法错误)
+# (修复 V6.2.13 的 '}' 错误 和 V6.2.14 的 'esase' 错误)
 # ==========================================================
 
 # --- 1. 颜色定义与基础变量 ---
@@ -14,7 +14,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # --- 版本控制和兼容性检查 ---
-SCRIPT_VERSION="6.2.14 (Syntax Fix)"
+SCRIPT_VERSION="6.2.15 (Final Syntax Fix)"
 MIN_BASH_VERSION=4
 
 # 核心构建根目录
@@ -1549,7 +1549,7 @@ main_menu() {
             8) diagnose_build_environment ;;
             0|Q|q) echo -e "${BLUE}退出脚本。${NC}"; break ;;
             *) echo -e "${RED}无效选择，请重新输入。${NC}"; sleep 1 ;;
-        esase
+        esac # <--- 已修正: 'esase' -> 'esac'
     done
 }
 
