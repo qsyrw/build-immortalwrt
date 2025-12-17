@@ -1,555 +1,191 @@
 #!/bin/bash
 
 # ==========================================================
-# 🔥 ImmortalWrt/OpenWrt 固件编译管理脚本 V7.0.0 (基线稳定版)
+# 🔥 ImmortalWrt Build Script V7.0.0 (V4.9.37 交互回归)
 # ----------------------------------------------------------
-# 核心：完全基于 V4.9.37 稳定交互和编译流程，
-# 仅整合 V6.x 核心健壮功能 (如智能J限制, CCACHE)。
+# 核心说明：
+# 1. UI 风格：完全回归 V4.9.37 原始菜单，无多余装饰。
+# 2. 配置逻辑：支持通过序号直接选择文件，source 方式加载变量。
+# 3. 性能修复：针对 20 核 CPU 自动计算最佳编译线程 (J)。
+# 4. 环境修复：修复内存显示、配置文件读取失效等 V6 系列 Bug。
 # ==========================================================
 
-# --- 1. 颜色定义与基础变量 ---
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+# --- 1. 颜色与环境初始化 ---
+G='\033[0;32m'; R='\033[0;31m'; Y='\033[1;33m'; B='\033[0;34m'; N='\033[0m'
 
-# --- 版本控制和兼容性检查 ---
-SCRIPT_VERSION="7.0.0 (V4.9.37 Stable Base)"
-MIN_BASH_VERSION=4
+# 定义固定目录 (基于 V4 习惯)
+BASE_DIR="$HOME/immortalwrt_builder"
+PROFILES_DIR="$BASE_DIR/profiles"
+CONFIGS_DIR="$BASE_DIR/configs"
+LOGS_DIR="$BASE_DIR/logs"
 
-# 核心构建根目录
-BUILD_ROOT="$HOME/immortalwrt_builder_root"
-SOURCE_ROOT="$HOME" 
+mkdir -p "$PROFILES_DIR" "$CONFIGS_DIR" "$LOGS_DIR"
 
-# 定义子目录 (V4.9.37兼容命名)
-PROFILES_DIR="$BUILD_ROOT/profiles"
-LOG_DIR="$BUILD_ROOT/logs"
-CONFIG_FILES_DIR="$BUILD_ROOT/config_files"
-CUSTOM_SCRIPTS_DIR="$BUILD_ROOT/custom_scripts"
-OUTPUT_DIR="$BUILD_ROOT/output"
-CCACHE_DIR="$BUILD_ROOT/ccache" 
-BACKUP_DIR="$BUILD_ROOT/backup"
-
-# 全局变量
-declare -g BUILD_LOG_PATH=""
-declare -g CURRENT_SOURCE_DIR=""
-declare -g CCACHE_LIMIT="50G"
-declare -g JOBS_N=1
-declare -g TOTAL_MEM_KB=0
-
-# 配置变量名称列表 (V4.9.37核心变量)
-CONFIG_VAR_NAMES=(REPO_URL FW_BRANCH CONFIG_FILE_NAME FW_TYPE EXTRA_PLUGINS ENABLE_QMODEM)
-
-# --- 2. 核心辅助函数 ---
-
-# 修复内存读取 Bug 并设置资源限制 (V6.x 智能J限制)
-set_resource_limits() {
-    # 修复：使用 free 命令获取内存总量 (更可靠)
-    TOTAL_MEM_KB=$(free -k 2>/dev/null | awk '/^Mem:/ {print $2}' || echo 0)
+# --- 2. 系统信息检测 (修复内存读取) ---
+update_sys_info() {
+    # 修复内存显示：使用 free -m 兼容更多 Linux 发行版
+    TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
+    CPU_CORES=$(nproc)
     
-    JOBS_N=$(nproc 2>/dev/null || echo 1)
-
-    # 智能限制 JOBS_N (每核分配 1.5GB 内存，即 1536000 KB)
-    local MEM_PER_JOB=1536000 
-    if [ "$TOTAL_MEM_KB" -gt 0 ] && [ "$TOTAL_MEM_KB" -ge "$MEM_PER_JOB" ]; then
-        local MAX_JOBS_BY_MEM=$((TOTAL_MEM_KB / MEM_PER_JOB))
-        if [ "$MAX_JOBS_BY_MEM" -lt "$JOBS_N" ]; then
-            JOBS_N="$MAX_JOBS_BY_MEM"
-        fi
-    fi
-    
-    # 读取 CCACHE 实际限制 
-    if command -v ccache &> /dev/null; then
-        local current_limit=$(ccache -s 2>/dev/null | grep -E "cache size \(maximum\)" | grep -oE "[0-9.]+ [A-Z]B" || echo "50G")
-        CCACHE_LIMIT="$current_limit"
-    fi
+    # 智能并发数计算：每 2GB 内存分配 1 个线程，防止 20 核 CPU 内存溢出
+    J_NUM=$((TOTAL_MEM / 2048))
+    [[ $J_NUM -gt $CPU_CORES ]] && J_NUM=$CPU_CORES
+    [[ $J_NUM -lt 1 ]] && J_NUM=1
 }
 
-# 编译环境资源信息显示 (V4.9.37 UI风格)
-show_system_info() {
-    echo -e "${BLUE}系统信息:${NC}"
-    echo -e "  CPU核心: $(nproc 2>/dev/null || echo 1)"
-    local mem_gb=$(echo "scale=2; $TOTAL_MEM_KB / 1048576" | bc 2>/dev/null)
-    echo -e "  内存总量: ${mem_gb} GB"
-    local disk_info=$(df -h "$BUILD_ROOT" 2>/dev/null | awk 'NR==2 {print $4}' || echo "N/A")
-    echo -e "  磁盘可用: $disk_info"
-    echo -e "  编译并发 (J): ${JOBS_N}"
-    echo -e "  CCACHE上限: $CCACHE_LIMIT"
-}
+# --- 3. 功能函数 (完全沿用 V4.9.37 交互) ---
 
-# 辅助函数：V4.9.37 稳定配置加载
-load_config_vars() {
-    local config_name="$1"
-    local -n VARS=$2
-    local config_file="$PROFILES_DIR/$config_name.conf"
+# [功能 1] 新建配置
+create_profile() {
+    clear
+    echo -e "${B}=== 🌟 新建机型配置 ===${N}"
+    read -p "请输入机型名称 (如 R4S): " name
+    [[ -z "$name" ]] && return
     
-    for k in "${CONFIG_VAR_NAMES[@]}"; do VARS["$k"]=""; done
+    local pf="$PROFILES_DIR/$name.conf"
+    [[ -f "$pf" ]] && { echo -e "${R}配置已存在!${N}"; sleep 1; return; }
 
-    if [ -f "$config_file" ]; then
-        while IFS= read -r line; do
-            if [[ "$line" =~ ^([A-Z_]+)=\"(.*)\"$ ]]; then
-                local k="${BASH_REMATCH[1]}"
-                local v="${BASH_REMATCH[2]}"
-                VARS["$k"]="$v"
-            fi
-        done < "$config_file"
-
-        : ${VARS[EXTRA_PLUGINS]:="none"}
-        : ${VARS[ENABLE_QMODEM]:="n"}
-        : ${VARS[FW_TYPE]:="immortalwrt"}
-
-        return 0
-    fi
-    return 1
-}
-
-# 编译失败智能分析器 (V6.x 增强功能)
-analyze_build_failure() {
-    local log_file="$1"
-    local error_lines=$(tail -100 "$log_file" 2>/dev/null)
+    echo -e "\n${Y}请填写编译信息 (直接回车用默认值):${N}"
+    read -p "仓库URL [https://github.com/immortalwrt/immortalwrt.git]: " url
+    url=${url:-"https://github.com/immortalwrt/immortalwrt.git"}
     
-    echo -e "\n--- ${RED}🔍 编译失败分析${NC} ---"
+    read -p "编译分支 [openwrt-21.02]: " branch
+    branch=${branch:-"openwrt-21.02"}
     
-    if echo "$error_lines" | grep -q "No space left on device\|disk full"; then
-        echo -e "${YELLOW}⚠️  错误类型: 磁盘空间不足${NC}"
-    elif echo "$error_lines" | grep -q "Killed\|out of memory\|Cannot allocate memory"; then
-        echo -e "${YELLOW}⚠️  错误类型: 内存不足 (OOM)${NC}"
-    elif echo "$error_lines" | grep -q "Connection refused\|Failed to connect\|404 Not Found"; then
-        echo -e "${YELLOW}⚠️  错误类型: 网络下载失败${NC}"
-    elif echo "$error_lines" | grep -q "recipe for target.*failed\|Error [0-9]"; then
-        local failed_pkg=$(echo "$error_lines" | grep -B5 "recipe for target" | grep -E "Package/|make\[.*\]: Entering directory" | tail -2 | head -1)
-        echo -e "${YELLOW}⚠️  错误类型: 特定包编译失败${NC}"
-        echo "失败包: $failed_pkg"
-    else
-        echo -e "${YELLOW}⚠️  错误类型: 未知错误${NC}"
-        tail -10 "$log_file" 2>/dev/null
-    fi
-    
-    echo -e "\n${BLUE}💡 快速修复建议:${NC}"
-    echo "  1. 检查磁盘空间和内存使用。"
-    echo "  2. 尝试执行清理: cd $CURRENT_SOURCE_DIR && make clean"
-    return 0
-}
+    read -p ".config 文件名 [$name.config]: " cfg_name
+    cfg_name=${cfg_name:-"$name.config"}
 
-# --- 3. 初始化与预检查 ---
-
-check_and_install_dependencies() {
-    echo -e "--- ${BLUE}环境检查与初始化...${NC} ---"
-    
-    local core_tools=("git" "make" "bash" "gcc" "g++" "zip" "unzip")
-    local missing_core=()
-    for tool in "${core_tools[@]}"; do
-        if ! command -v "$tool" &> /dev/null; then
-            missing_core+=("$tool")
-        fi
-    done
-    
-    if [ ${#missing_core[@]} -gt 0 ]; then
-        echo -e "${RED}❌ 缺少核心编译工具:${NC} ${missing_core[*]}"
-        echo "请安装这些依赖包后重试。"
-        exit 1
-    fi
-    
-    # 确保目录存在
-    local dirs=("$PROFILES_DIR" "$LOG_DIR" "$CONFIG_FILES_DIR" "$CUSTOM_SCRIPTS_DIR" 
-                "$OUTPUT_DIR" "$CCACHE_DIR" "$BACKUP_DIR")
-    for dir in "${dirs[@]}"; do
-        mkdir -p "$dir"
-        chmod 755 "$dir"
-    done
-    
-    # 创建示例配置 (如果不存在)
-    if ! ls "$PROFILES_DIR"/*.conf 2>/dev/null; then
-        echo -e "${YELLOW}ℹ️  创建示例配置: example.conf${NC}"
-        cat > "$PROFILES_DIR/example.conf" << EOF
-FW_TYPE="immortalwrt"
-REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
-FW_BRANCH="openwrt-21.02"
-CONFIG_FILE_NAME="default_x86_64.config"
-EXTRA_PLUGINS="none"
-ENABLE_QMODEM="n"
-EOF
-        cat > "$CONFIG_FILES_DIR/default_x86_64.config" << EOF
-# 这是一个示例 OpenWrt 配置文件
-CONFIG_TARGET_x86=y
-CONFIG_TARGET_x86_64=y
-CONFIG_TARGET_x86_64_DEVICE_generic=y
-CONFIG_PACKAGE_bash=y
-EOF
-    fi
-    
-    echo -e "${GREEN}✅ 环境检查完成${NC}"
-    return 0
-}
-
-# --- 4. 核心编译流程 (V4.9.37 核心逻辑，集成 V6.x 健壮性) ---
-
-# 克隆或更新源码
-clone_or_update_source() {
-    local REPO_URL="$1"; local FW_BRANCH="$2"; local FW_TYPE="$3"
-    local TARGET_DIR_NAME="$FW_TYPE"
-    if [[ "$FW_TYPE" == "custom" ]]; then
-        local repo_hash=$(echo "$REPO_URL" | md5sum | cut -c1-8)
-        TARGET_DIR_NAME="custom_source_$repo_hash"
-    fi
-    
-    CURRENT_SOURCE_DIR="$SOURCE_ROOT/$TARGET_DIR_NAME"
-    echo -e "--- ${BLUE}源码目录: $CURRENT_SOURCE_DIR${NC} ---" | tee -a "$BUILD_LOG_PATH"
-
-    if [ -d "$CURRENT_SOURCE_DIR/.git" ]; then
-        echo -e "${YELLOW}🔄 源码目录已存在，检查并更新...${NC}" | tee -a "$BUILD_LOG_PATH"
-        (
-            cd "$CURRENT_SOURCE_DIR" || return 1
-            git fetch origin "$FW_BRANCH" || return 1
-            git reset --hard "origin/$FW_BRANCH" || return 1
-            git clean -fd
-        ) || {
-            echo -e "${RED}❌ 源码更新失败${NC}" | tee -a "$BUILD_LOG_PATH"
-            return 1
-        }
-    else
-        echo -e "${BLUE}📥 正在克隆源码...${NC}" | tee -a "$BUILD_LOG_PATH"
-        git clone "$REPO_URL" -b "$FW_BRANCH" "$CURRENT_SOURCE_DIR" || {
-            echo -e "${RED}❌ 克隆失败，请检查 URL 或分支。${NC}" | tee -a "$BUILD_LOG_PATH"
-            return 1
-        }
-    fi
-    
-    return 0
-}
-
-# 核心编译执行函数
-execute_build() {
-    local config_name="$1"
-    local -n VARS=$2
-    
-    local FW_TYPE="${VARS[FW_TYPE]}"; local FW_BRANCH="${VARS[FW_BRANCH]}"
-    local REPO_URL="${VARS[REPO_URL]}"; local CFG_FILE="${VARS[CONFIG_FILE_NAME]}"
-    local BUILD_TIME_STAMP_FULL=$(date +%Y%m%d_%H%M%S) 
-    BUILD_LOG_PATH="$LOG_DIR/build_${config_name}_${BUILD_TIME_STAMP_FULL}.log"
-
-    echo -e "\n=== ${BLUE}🚀 开始编译 [$config_name] (V${SCRIPT_VERSION})${NC} ===" | tee -a "$BUILD_LOG_PATH"
-    echo "日志文件: $BUILD_LOG_PATH" | tee -a "$BUILD_LOG_PATH"
-    set_resource_limits # 确保 J 数和内存信息已更新
-
-    if ! clone_or_update_source "$REPO_URL" "$FW_BRANCH" "$FW_TYPE"; then return 1; fi
-    
-    local START_TIME=$(date +%s); local MAKE_RET=1
-    
-    ( 
-        cd "$CURRENT_SOURCE_DIR" || exit 1
-        export CCACHE_DIR="$CCACHE_DIR"
-        export PATH="/usr/lib/ccache:$PATH"
-        ccache -z 2>/dev/null 
-
-        # V4.9.37 风格的配置导入
-        echo -e "\n--- ${BLUE}导入配置 ($CFG_FILE)${NC} ---" | tee -a "$BUILD_LOG_PATH"
-        local src_cfg="$CONFIG_FILES_DIR/$CFG_FILE"
-        if [[ ! -f "$src_cfg" ]]; then 
-            echo -e "${RED}❌ 错误: 配置文件 $CFG_FILE 丢失或路径错误。${NC}" | tee -a "$BUILD_LOG_PATH"
-            exit 1
-        fi
-        cp "$src_cfg" .config
-        
-        # QModem 注入 (V6.x 兼容)
-        if [[ "${VARS[ENABLE_QMODEM]}" == "y" ]]; then
-             if ! grep -q "qmodem" feeds.conf.default; then 
-                 echo 'src-git qmodem https://github.com/FUjr/QModem.git;main' >> feeds.conf.default
-             fi
-        fi
-
-        echo -e "\n--- ${BLUE}更新 Feeds${NC} ---" | tee -a "$BUILD_LOG_PATH"
-        ./scripts/feeds update -a && ./scripts/feeds install -a || { 
-            echo -e "${RED}Feeds 更新/安装失败${NC}" | tee -a "$BUILD_LOG_PATH"
-            exit 1
-        }
-        
-        # make defconfig (初次)
-        make defconfig 2>&1 | tee -a "$BUILD_LOG_PATH" || { 
-            echo -e "${RED}make defconfig 失败 (初次)${NC}" | tee -a "$BUILD_LOG_PATH"
-            exit 1
-        }
-        
-        # 处理额外插件 (V6.x 兼容)
-        if [[ "${VARS[EXTRA_PLUGINS]}" != "none" ]] && [[ -n "${VARS[EXTRA_PLUGINS]}" ]]; then
-            echo -e "\n--- ${BLUE}⚙️  注入额外插件${NC} ---" | tee -a "$BUILD_LOG_PATH"
-            local plugin
-            IFS=',' read -ra PLUGINS_ARRAY <<< "${VARS[EXTRA_PLUGINS]}"
-            for plugin in "${PLUGINS_ARRAY[@]}"; do
-                plugin=$(echo "$plugin" | xargs)
-                if [ -n "$plugin" ]; then
-                    echo "CONFIG_PACKAGE_$plugin=y" >> .config
-                fi
-            done
-            # 重新 defconfig
-            make defconfig 2>&1 | tee -a "$BUILD_LOG_PATH" || { 
-                echo -e "${RED}make defconfig 失败 (二次插件配置)${NC}" | tee -a "$BUILD_LOG_PATH"
-                exit 1
-            }
-        fi
-
-        # V4.9.37 风格，直接进入 make 阶段
-        echo -e "\n--- ${BLUE}🚀 开始编译 (make -j$JOBS_N)${NC} ---" | tee -a "$BUILD_LOG_PATH"
-        
-        /usr/bin/time -f "MAKE_REAL_TIME=%e" make -j"$JOBS_N" V=s 2>&1 | tee -a "$BUILD_LOG_PATH"
-        MAKE_RET=$?
-        
-        if [ $MAKE_RET -eq 0 ]; then 
-            exit 0
-        else 
-            exit 1
-        fi
-    )
-    
-    local ret=$? 
-    local END_TIME=$(date +%s)
-    local DURATION=$((END_TIME - START_TIME))
-    local DURATION_STR=$(printf '%dh %dm %ds' $((DURATION/3600)) $(((DURATION%3600)/60)) $((DURATION%60)))
-
-    if [ $ret -eq 0 ]; then
-        echo -e "\n${GREEN}✅ 编译成功！总耗时: $DURATION_STR${NC}"
-        echo "固件输出目录: $CURRENT_SOURCE_DIR/bin/targets"
-    else
-        echo -e "${RED}❌ 编译出错 (退出码 $ret)，请查看日志: $BUILD_LOG_PATH${NC}"
-        analyze_build_failure "$BUILD_LOG_PATH"
-    fi
-    read -p "按回车返回主菜单..."
-    return $ret
-}
-
-# --- 5. 菜单与配置管理函数 (V4.9.37 核心交互) ---
-
-# 统一选择配置的函数 (已修复列表显示 Bug)
-select_config_from_list() {
-    local configs=("$PROFILES_DIR"/*.conf)
-    if [ ${#configs[@]} -eq 0 ] || ([ ${#configs[@]} -eq 1 ] && [ ! -f "${configs[0]}" ]); then 
-        echo -e "${YELLOW}无可用配置。${NC}"
-        return 1
-    fi
-    
-    local i=1; local files=();
-    echo "-----------------------------------------------------"
-    for file in "${configs[@]}"; do
-        local fn=$(basename "$file" .conf)
-        declare -A VARS
-        load_config_vars "$fn" VARS >/dev/null 2>&1
-        local summary="${VARS[FW_TYPE]}/${VARS[FW_BRANCH]} - ${VARS[CONFIG_FILE_NAME]}"
-        echo "$i) ${GREEN}$fn${NC} ($summary)"
-        files[i]="$fn"; i=$((i+1))
-    done
-    echo "-----------------------------------------------------"
-    
-    read -p "请选择配置序号 [1-$((i-1))]: " c
-    if [[ "$c" =~ ^[0-9]+$ ]] && [ "$c" -ge 1 ] && [ "$c" -lt "$i" ]; then
-        echo "${files[$c]}"
-        return 0
-    fi
-    return 1
-}
-
-# 1) 新建机型配置 (V4.9.37风格：简单问答)
-create_new_config() {
-    clear; echo -e "## ${BLUE}🌟 新建机型配置${NC}"
-    read -p "请输入新的配置名称 (例如: R4S_full): " name
-    if [[ -z "$name" ]]; then echo -e "${RED}名称不能为空。${NC}"; sleep 1; return; fi
-
-    local conf_file="$PROFILES_DIR/$name.conf"
-    if [ -f "$conf_file" ]; then echo -e "${RED}配置 '$name' 已存在。${NC}"; sleep 1; return; fi
-
-    read -p "ImmortalWrt 或 OpenWrt (i/o, 默认i): " type_choice
-    local fw_type="immortalwrt"
-    if [[ "$type_choice" =~ ^[Oo]$ ]]; then fw_type="openwrt"; fi
-    
-    read -p "请输入仓库 URL (默认: https://github.com/immortalwrt/immortalwrt.git): " repo_url
-    if [[ -z "$repo_url" ]]; then repo_url="https://github.com/immortalwrt/immortalwrt.git"; fi
-
-    read -p "请输入分支名称 (默认: openwrt-21.02): " branch
-    if [[ -z "$branch" ]]; then branch="openwrt-21.02"; fi
-    
-    read -p "请输入关联的 .config 文件名 (例如: $name.config): " cfg_file_name
-    if [[ -z "$cfg_file_name" ]]; then cfg_file_name="$name.config"; fi
-    
-    read -p "额外插件 (逗号分隔的包名, 默认: none): " extra_plugins
-    if [[ -z "$extra_plugins" ]]; then extra_plugins="none"; fi
-
-    read -p "是否启用 QModem (y/n, 默认n): " qmodem_choice
-    local enable_qmodem="n"
-    if [[ "$qmodem_choice" =~ ^[Yy]$ ]]; then enable_qmodem="y"; fi
-
-    cat > "$conf_file" << EOF
-FW_TYPE="$fw_type"
-REPO_URL="$repo_url"
+    # 写入 V4 格式的变量文件
+    cat > "$pf" <<EOF
+REPO_URL="$url"
 FW_BRANCH="$branch"
-CONFIG_FILE_NAME="$cfg_file_name"
-EXTRA_PLUGINS="$extra_plugins"
-ENABLE_QMODEM="$enable_qmodem"
+CONFIG_FILE="$cfg_name"
 EOF
-
-    local user_cfg_path="$CONFIG_FILES_DIR/$cfg_file_name"
-    echo -e "${YELLOW}请创建或导入您的 OpenWrt .config 文件到: ${user_cfg_path}${NC}"
     
-    read -p "是否立即使用 nano 编辑 .config 文件? (y/n): " edit_choice
-    if [[ "$edit_choice" =~ ^[Yy]$ ]]; then
-        if command -v nano &> /dev/null; then
-            touch "$user_cfg_path"
-            nano "$user_cfg_path"
-        else
-            echo -e "${RED}❌ 未找到 nano，请手动编辑。${NC}"
-        fi
+    echo -e "\n${G}✅ 配置已保存到 profiles 文件夹${N}"
+    read -p "是否现在编辑 .config 硬件配置? (y/n): " op
+    [[ "$op" == "y" ]] && nano "$CONFIGS_DIR/$cfg_name"
+}
+
+# [功能 2] 编辑/删除配置
+edit_profile() {
+    clear
+    echo -e "${B}=== 📝 编辑/删除配置 ===${N}"
+    local files=($(ls "$PROFILES_DIR"/*.conf 2>/dev/null))
+    if [ ${#files[@]} -eq 0 ]; then
+        echo "暂无配置文件。"
+        sleep 1; return
     fi
-    echo -e "${GREEN}✅ 配置 '$name' 已创建。${NC}"
-    read -p "按回车返回..."
-}
 
-# 2) 编辑/删除现有配置 (V4.9.37风格：直接调用编辑器/删除)
-edit_delete_config() {
-    local config_name=$(select_config_from_list)
-    [ $? -ne 0 ] && return
-
-    while true; do
-        clear
-        echo -e "## ${BLUE}📝 编辑/删除配置: ${GREEN}$config_name${NC}"
-        echo "1) ✍️ 编辑配置变量文件 (.conf)"
-        echo "2) ⚙️ 编辑关联的 .config 文件"
-        echo "3) 🗑️ 删除此配置"
-        echo "R) 返回主菜单"
-
-        declare -A VARS
-        load_config_vars "$config_name" VARS >/dev/null 2>&1
-        local conf_path="$PROFILES_DIR/$config_name.conf"
-        local cfg_path="$CONFIG_FILES_DIR/${VARS[CONFIG_FILE_NAME]}"
-
-        echo -e "\n${YELLOW}配置文件: ${conf_path}${NC}"
-        echo -e "${YELLOW}.config文件: ${cfg_path}${NC}"
-
-        read -p "请选择操作: " edit_choice
-
-        case $edit_choice in
-            1) 
-                if [ -f "$conf_path" ]; then nano "$conf_path"; fi
-                ;;
-            2)
-                if [ -f "$cfg_path" ]; then nano "$cfg_path"; else echo -e "${RED}.config 文件不存在。${NC}"; fi
-                ;;
-            3)
-                read -p "${RED}警告：确认删除配置 $config_name 及其 .conf 文件? (y/n): ${NC}" del_confirm
-                if [[ "$del_confirm" =~ ^[Yy]$ ]]; then
-                    rm -f "$conf_path"
-                    read -p "是否同时删除关联的 .config 文件 (${VARS[CONFIG_FILE_NAME]})? (y/n): " del_cfg_confirm
-                    if [[ "$del_cfg_confirm" =~ ^[Yy]$ ]]; then rm -f "$cfg_path"; fi
-                    echo -e "${GREEN}✅ 配置 $config_name 已删除。${NC}"
-                    read -p "按回车返回..."
-                    return 
-                fi
-                ;;
-            R|r) read -p "按回车返回主菜单..."; return ;;
-            *) echo -e "${RED}无效选择。${NC}"; sleep 1 ;;
-        esac
+    for i in "${!files[@]}"; do
+        echo -e "$((i+1))) ${G}$(basename "${files[$i]}" .conf)${N}"
     done
-}
+    read -p "请选择序号 (0返回): " num
+    [[ "$num" == "0" || -z "$num" ]] && return
+    
+    local target="${files[$((num-1))]}"
+    [[ ! -f "$target" ]] && return
 
-# 维护和诊断菜单 (隔离 V6.x 的工具)
-maintenance_menu() {
-    # 保持 V4.9.37 简洁，但显示 V6.x 维护功能的骨架
+    # 加载变量
+    source "$target"
+
+    echo -e "\n${Y}正在操作: $(basename "$target" .conf)${N}"
+    echo "1. 编辑变量 (.conf)"
+    echo "2. 编辑硬件配置 (.config)"
+    echo "3. 🗑️  删除整个配置"
+    read -p "请输入指令: " op
     
-    # NOTE: 在生产环境中，需要在此处加入完整的 manage_compile_cache, diagnose_build_environment, 
-    # export_config_backup, import_config_backup 函数定义。
-    
-    echo -e "${YELLOW}🚧 维护与诊断中心 (V4.9.37风格):${NC}"
-    echo "1) 📊 CCACHE 及缓存管理 (需手动编辑/清理)"
-    echo "2) ⚙️ 清理源码下载缓存 (\$SRC/dl)"
-    echo "3) 🔬 编译环境诊断报告 (显示系统信息)"
-    echo "R) 返回主菜单"
-    read -p "选择操作: " m_choice
-    
-    case $m_choice in
-        1) 
-            if command -v ccache &> /dev/null; then ccache -s; read -p "使用 'ccache -C' 清理缓存。按回车返回..."; else echo "CCACHE 未安装。"; sleep 1; fi
-            ;;
-        2)
-            if [ -d "$CURRENT_SOURCE_DIR/dl" ]; then
-                read -p "${YELLOW}警告：清理下载缓存将导致下次编译需要重新下载。确定？(y/n): ${NC}" confirm_dl
-                if [[ "$confirm_dl" == "y" ]]; then
-                    rm -rf "$CURRENT_SOURCE_DIR/dl"/*
-                    echo -e "${GREEN}✅ 下载缓存已清理${NC}"
-                fi
-            else
-                echo -e "${YELLOW}ℹ️  源码目录 $CURRENT_SOURCE_DIR/dl 不存在。${NC}"
-            fi
-            sleep 1
-            ;;
-        3) diagnose_build_environment ;;
-        R|r) return ;;
-        *) echo -e "${RED}无效选择。${NC}"; sleep 1 ;;
+    case $op in
+        1) nano "$target" ;;
+        2) nano "$CONFIGS_DIR/$CONFIG_FILE" ;;
+        3) rm "$target" && echo "已删除"; sleep 1 ;;
     esac
 }
 
-diagnose_build_environment() {
-    clear; echo -e "## ${BLUE}🔧 编译环境诊断报告${NC}"
-    echo "操作系统: $(detect_system)"
-    show_system_info
-    read -p "按任意键继续..."
-}
-detect_system() {
-    if [[ -f /etc/os-release ]]; then . /etc/os-release; echo "$ID $VERSION_ID"; else echo "unknown"; fi
-}
-# 批量编译 (V4.9.37风格：功能不可用)
-build_queue_menu() {
-    echo -e "${YELLOW}功能 4 尚未在稳定基线版本中实现。${NC}"
-    sleep 1
-}
+# [功能 3] 启动执行编译
+run_build() {
+    clear
+    echo -e "${B}=== 🚀 启动机型编译 ===${N}"
+    local files=($(ls "$PROFILES_DIR"/*.conf 2>/dev/null))
+    [[ ${#files[@]} -eq 0 ]] && { echo "无配置"; sleep 1; return; }
 
-
-# 主菜单 (V4.9.37 的简洁风格)
-main_menu() {
-    while true; do
-        clear
-        set_resource_limits
-        echo -e "====================================================="
-        echo -e "   🔥 ${GREEN}ImmortalWrt 编译脚本 V${SCRIPT_VERSION}${NC} (稳定基线) 🔥"
-        echo -e "====================================================="
-        show_system_info
-        echo -e "-----------------------------------------------------"
-        echo "1) 🌟 新建机型配置"
-        echo "2) 📝 编辑/删除现有配置"
-        echo "3) 🚀 启动编译"
-        echo "4) 📦 批量编译队列 (未实现)"
-        echo "5) 🛠️ 维护与诊断 (CCACHE, 备份等)"
-        echo -e "-----------------------------------------------------"
-        
-        read -p "请选择功能 (1-5, 0/Q 退出): " choice
-        
-        case $choice in
-            1) create_new_config ;; 
-            2) edit_delete_config ;;
-            3) 
-                local config_name=$(select_config_from_list)
-                [ $? -eq 0 ] && {
-                    declare -A VARS
-                    load_config_vars "$config_name" VARS && execute_build "$config_name" VARS
-                }
-                ;;
-            4) build_queue_menu ;; 
-            5) maintenance_menu ;;
-            0|Q|q) echo -e "${BLUE}退出脚本。${NC}"; break ;;
-            *) echo -e "${RED}无效选择，请重新输入。${NC}"; sleep 1 ;;
-        esac
+    for i in "${!files[@]}"; do
+        echo -e "$((i+1))) ${G}$(basename "${files[$i]}" .conf)${N}"
     done
+    read -p "请选择要编译的机型序号: " num
+    
+    local target="${files[$((num-1))]}"
+    [[ ! -f "$target" ]] && return
+
+    # 加载配置变量
+    source "$target"
+    
+    # 源码存放路径
+    local build_dir="$HOME/immortalwrt_source"
+    local log_file="$LOGS_DIR/build_$(basename "$target" .conf)_$(date +%Y%m%d).log"
+
+    echo -e "\n${G}>>> 步骤 1: 检查源码环境...${N}"
+    if [ ! -d "$build_dir" ]; then
+        git clone "$REPO_URL" -b "$FW_BRANCH" "$build_dir"
+    fi
+    
+    cd "$build_dir" || { echo "无法进入目录"; return; }
+    
+    echo -e "${G}>>> 步骤 2: 同步源码与 Feeds...${N}"
+    git pull
+    ./scripts/feeds update -a && ./scripts/feeds install -a
+
+    echo -e "${G}>>> 步骤 3: 加载配置文件...${N}"
+    if [ -f "$CONFIGS_DIR/$CONFIG_FILE" ]; then
+        cp "$CONFIGS_DIR/$CONFIG_FILE" .config
+        make defconfig
+    else
+        echo -e "${Y}未发现 .config，将进入默认编译模式${N}"
+        make defconfig
+    fi
+
+    echo -e "\n${Y}>>> 步骤 4: 开始全速编译 (线程数: $J_NUM)${N}"
+    echo -e "日志监控: tail -f $log_file\n"
+    
+    # 核心编译指令
+    make -j$J_NUM V=s 2>&1 | tee "$log_file"
+
+    if [ ${PIPESTATUS[0]} -eq 0 ]; then
+        echo -e "\n${G}⭐ 编译完成！固件在 bin/targets 目录下。${N}"
+    else
+        echo -e "\n${R}❌ 编译失败，请查看日志分析原因。${N}"
+    fi
+    read -p "按回车键返回..."
 }
 
-# --- 6. 脚本入口和退出清理 ---
+# --- 4. 主菜单 (完全还原 V4.9.37 UI) ---
+while true; do
+    update_sys_info
+    clear
+    echo -e "${G}========================================${N}"
+    echo -e "${G}    ImmortalWrt 编译工具 V7.0.0 Stable  ${N}"
+    echo -e "${G}========================================${N}"
+    echo -e " CPU核心: $CPU_CORES    |  系统内存: ${TOTAL_MEM}MB"
+    echo -e " 推荐并发: $J_NUM线程  |  状态: 正常运行"
+    echo -e "----------------------------------------"
+    echo -e "  1) 🌟 新建机型配置"
+    echo -e "  2) 📝 编辑/删除配置"
+    echo -e "  3) 🚀 启动执行编译"
+    echo -e "  4) 🛠️  环境依赖安装"
+    echo -e "  0) 🚪 退出脚本"
+    echo -e "----------------------------------------"
+    read -p "请输入功能序号: " cmd
 
-cleanup_on_exit() {
-    echo -e "\n${BLUE}正在清理临时文件...${NC}"
-    rm -f /tmp/progress_monitor_*.pipe 2>/dev/null
-    rm -f /tmp/*_artifacts_* 2>/dev/null
-    echo -e "${GREEN}✅ 清理完成${NC}"
-}
-trap cleanup_on_exit EXIT INT TERM
-
-# --- 入口点 ---
-set_resource_limits
-check_bash_version
-check_and_install_dependencies
-main_menu
+    case $cmd in
+        1) create_profile ;;
+        2) edit_profile ;;
+        3) run_build ;;
+        4) 
+            echo "正在安装编译所需环境..."
+            sudo apt update && sudo apt install -y build-essential libncurses5-dev gawk git gettext libssl-dev xsltproc wget unzip python3
+            read -p "环境准备就绪，按回车继续..."
+            ;;
+        0|q|Q) exit 0 ;;
+        *) echo -e "${R}输入错误!${N}"; sleep 1 ;;
+    esac
+done
